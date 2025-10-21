@@ -298,7 +298,12 @@ def filter_products(products: List[Dict[str, Any]], keywords: List[str]) -> List
     return filtered
 
 
-def fetch_products_for_category(headers: Dict[str, str], cat: CategoryPair) -> List[Dict[str, Any]]:
+def fetch_products_for_category_page(
+    headers: Dict[str, str],
+    cat: CategoryPair,
+    page_no: int,
+    page_size: int,
+) -> Tuple[List[Dict[str, Any]], Any]:
     payload = {
         "custNo": "0",
         "domain": "WOMEN",
@@ -307,13 +312,83 @@ def fetch_products_for_category(headers: Dict[str, str], cat: CategoryPair) -> L
         "ageGroup": "all",
         "depth1Code": cat.depth1_code,
         "depth2Code": cat.depth2_code,
-        "pageSize": 200,
-        "pageNo": 1,
+        "pageSize": page_size,
+        "pageNo": page_no,
     }
     resp = requests.post(PRODUCT_ENDPOINT, headers=headers, json=payload, timeout=30)
     resp.raise_for_status()
     data = resp.json()
-    return extract_products_list(data)
+    products = extract_products_list(data)
+    return products, data
+
+
+def _infer_has_next_page(
+    response_json: Any, current_page_no: int, page_size: int, last_page_count: int
+) -> bool:
+    # Try to infer pagination from common fields present in the response body
+    def _dig(obj: Any) -> List[Dict[str, Any]]:
+        dicts: List[Dict[str, Any]] = []
+        if isinstance(obj, dict):
+            dicts.append(obj)
+            for v in obj.values():
+                dicts.extend(_dig(v))
+        elif isinstance(obj, list):
+            for item in obj:
+                dicts.extend(_dig(item))
+        return dicts
+
+    for d in _dig(response_json):
+        # Explicit boolean flags
+        for key in ("hasNext", "hasNextPage", "hasMore", "next"):
+            val = d.get(key)
+            if isinstance(val, bool):
+                return val
+
+        # Total pages
+        total_pages = d.get("totalPages") or d.get("lastPage") or d.get("pages")
+        if isinstance(total_pages, int) and total_pages > 0:
+            return current_page_no < total_pages
+
+        # Total count
+        total_count = d.get("totalCount") or d.get("totalElements") or d.get("count")
+        if isinstance(total_count, int) and total_count >= 0:
+            return (current_page_no * page_size) < total_count
+
+    # Fallback: if we received a full page, assume there might be a next page
+    return last_page_count >= page_size
+
+
+def fetch_all_products_for_category(
+    headers: Dict[str, str],
+    cat: CategoryPair,
+    page_size: int = 200,
+    max_pages: int = 0,
+) -> List[Dict[str, Any]]:
+    collected: List[Dict[str, Any]] = []
+    current_page = 1
+    while True:
+        products, res_json = fetch_products_for_category_page(
+            headers, cat, page_no=current_page, page_size=page_size
+        )
+        if not products:
+            break
+        collected.extend(products)
+
+        # Stop if we've reached the configured page limit (0 means unlimited)
+        if max_pages and current_page >= max_pages:
+            break
+
+        has_next = _infer_has_next_page(
+            response_json=res_json,
+            current_page_no=current_page,
+            page_size=page_size,
+            last_page_count=len(products),
+        )
+        if not has_next:
+            break
+        current_page += 1
+
+    return collected
 
 
 def write_csv(rows: List[List[Any]], output_dir: Path) -> Path:
@@ -332,6 +407,13 @@ def write_csv(rows: List[List[Any]], output_dir: Path) -> Path:
 def main():
     parser = argparse.ArgumentParser(description="Export Wconcept best products filtered by keyword to CSV")
     parser.add_argument("--output-dir", default="output", help="CSV 출력 디렉터리")
+    parser.add_argument("--page-size", type=int, default=200, help="페이지당 상품 수 (기본 200)")
+    parser.add_argument(
+        "--max-pages",
+        type=int,
+        default=0,
+        help="최대 페이지 수 (0=제한 없음, 자동 종료)",
+    )
     args = parser.parse_args()
 
     output_dir = Path(args.output_dir)
@@ -344,9 +426,14 @@ def main():
 
     rows: List[List[Any]] = []
 
+    page_size = max(1, int(args.page_size))
+    max_pages = max(0, int(args.max_pages))
+
     for cat in categories:
         try:
-            products = fetch_products_for_category(base_headers, cat)
+            products = fetch_all_products_for_category(
+                base_headers, cat, page_size=page_size, max_pages=max_pages
+            )
         except Exception:
             continue
         filtered = filter_products(products, KEYWORDS)
