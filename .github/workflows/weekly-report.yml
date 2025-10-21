@@ -19,11 +19,6 @@ jobs:
         with:
           fetch-depth: 0  # 전체 히스토리 가져오기
       
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-      
       - name: Generate weekly report
         id: generate
         run: |

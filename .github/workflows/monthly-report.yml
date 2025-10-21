@@ -42,12 +42,6 @@ jobs:
         with:
           fetch-depth: 0  # 전체 히스토리 가져오기
       
-      - name: Set up Python
-        if: steps.check_date.outputs.is_first_day == 'true' || github.event_name == 'workflow_dispatch'
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-      
       - name: Calculate target month
         if: steps.check_date.outputs.is_first_day == 'true' || github.event_name == 'workflow_dispatch'
         id: calc
