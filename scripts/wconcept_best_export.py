@@ -15,6 +15,7 @@ import requests
 from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 from playwright.sync_api import sync_playwright
 from zoneinfo import ZoneInfo
+from scripts.log_utils import install_global_exception_logger, setup_logging
 
 KST = ZoneInfo("Asia/Seoul")
 BEST_PAGE_URL = (
@@ -24,7 +25,7 @@ BEST_PAGE_URL = (
 CATEGORY_ENDPOINT_SUBSTR = "/display/api/best/v1/product"
 PRODUCT_ENDPOINT = "https://gw-front.wconcept.co.kr/display/api/best/v1/product"
 
-KEYWORDS = ["하시에", "hacie"]
+ALLOWED_BRANDS = ["하시에", "HACIE"]
 
 
 @dataclass(frozen=True)
@@ -284,16 +285,21 @@ def pick_rank(idx: int, product: Dict[str, Any]) -> int:
     return idx + 1
 
 
-def filter_products(products: List[Dict[str, Any]], keywords: List[str]) -> List[Dict[str, Any]]:
+def filter_products_by_brand(products: List[Dict[str, Any]], allowed_brands: List[str]) -> List[Dict[str, Any]]:
     if not products:
         return []
-    pattern = re.compile("(" + "|".join(re.escape(k) for k in keywords) + ")", re.IGNORECASE)
+    allowed_exact_korean = {b.strip() for b in allowed_brands if b.strip() and not b.strip().isascii()}
+    allowed_english_casefold = {b.strip().casefold() for b in allowed_brands if b.strip() and b.strip().isascii()}
+
     filtered: List[Dict[str, Any]] = []
     for p in products:
-        name = pick_name(p)
-        brand = pick_brand(p)
-        text = f"{name} {brand}".strip()
-        if pattern.search(text):
+        brand = pick_brand(p).strip()
+        if not brand:
+            continue
+        if brand in allowed_exact_korean:
+            filtered.append(p)
+            continue
+        if brand.casefold() in allowed_english_casefold:
             filtered.append(p)
     return filtered
 
@@ -405,6 +411,8 @@ def write_csv(rows: List[List[Any]], output_dir: Path) -> Path:
 
 
 def main():
+    logger = setup_logging("wconcept_best_export")
+    install_global_exception_logger(logger)
     parser = argparse.ArgumentParser(description="Export Wconcept best products filtered by keyword to CSV")
     parser.add_argument("--output-dir", default="output", help="CSV 출력 디렉터리")
     parser.add_argument("--page-size", type=int, default=200, help="페이지당 상품 수 (기본 200)")
@@ -418,7 +426,11 @@ def main():
 
     output_dir = Path(args.output_dir)
 
-    api_key, categories, base_headers = get_api_key_and_categories()
+    try:
+        api_key, categories, base_headers = get_api_key_and_categories()
+    except Exception:
+        logger.exception("카테고리 및 API 키 수집 중 오류 발생")
+        raise
 
     kst_now = datetime.now(KST)
     date_str = kst_now.strftime("%Y-%m-%d")
@@ -435,8 +447,14 @@ def main():
                 base_headers, cat, page_size=page_size, max_pages=max_pages
             )
         except Exception:
+            logger.exception(
+                "카테고리 페이지 수집 중 오류", extra={
+                    "depth1": f"{cat.depth1_name or cat.depth1_code}",
+                    "depth2": f"{cat.depth2_name or cat.depth2_code}",
+                }
+            )
             continue
-        filtered = filter_products(products, KEYWORDS)
+        filtered = filter_products_by_brand(products, ALLOWED_BRANDS)
         for idx, p in enumerate(filtered):
             rank = pick_rank(idx, p)
             name = pick_name(p)
@@ -456,11 +474,11 @@ def main():
     if not rows:
         # Write empty CSV with headers for traceability
         out = write_csv([], output_dir)
-        print(f"CSV 생성 완료 (데이터 없음): {out}")
+        logger.info("CSV 생성 완료 (데이터 없음): %s", out)
         return
 
     out = write_csv(rows, output_dir)
-    print(f"CSV 생성 완료: {out}")
+    logger.info("CSV 생성 완료: %s", out)
 
 
 if __name__ == "__main__":
