@@ -21,11 +21,13 @@ jobs:
       
       - name: Generate weekly report
         id: generate
+        env:
+          TZ: Asia/Seoul
         run: |
           # KST 기준 오늘 날짜 (월요일)
-          year=$(TZ=Asia/Seoul date '+%Y')
-          month=$(TZ=Asia/Seoul date '+%m')
-          day=$(TZ=Asia/Seoul date '+%d')
+          year=$(date '+%Y')
+          month=$(date '+%m')
+          day=$(date '+%d')
           
           # 주차 계산 (해당 월의 몇 번째 주인지)
           week_num=$(( ($(TZ=Asia/Seoul date '+%d') - 1) / 7 + 1 ))
@@ -52,19 +54,25 @@ jobs:
       
       - name: Display report summary
         if: steps.generate.outputs.report_exists == 'true'
+        env:
+          TZ: Asia/Seoul
         run: |
           report_file="${{ steps.generate.outputs.report_file }}"
           
           echo "=== 주간 리포트 요약 ==="
           if [ -f "$report_file" ]; then
             head -30 "$report_file"
+          else
+            echo "⚠️ 리포트 파일이 없습니다: $report_file"
           fi
       
       - name: Commit and push weekly report
         if: steps.generate.outputs.report_exists == 'true'
+        env:
+          TZ: Asia/Seoul
         run: |
-          git config --local user.email "github-actions[bot]@users.noreply.github.com"
-          git config --local user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git config --global user.name "github-actions[bot]"
           
           year="${{ steps.generate.outputs.year }}"
           month="${{ steps.generate.outputs.month }}"
@@ -80,7 +88,7 @@ jobs:
           if git diff --staged --quiet; then
             echo "변경사항이 없습니다."
           else
-            kst_date=$(TZ=Asia/Seoul date '+%Y년 %m월 %d일')
+            kst_date=$(date '+%Y년 %m월 %d일')
             
             commit_msg="📊 주간 리포트 생성: ${year}년 ${month}월 ${week_num}주차
 
@@ -106,6 +114,8 @@ jobs:
       
       - name: Create summary
         if: steps.generate.outputs.report_exists == 'true'
+        env:
+          TZ: Asia/Seoul
         run: |
           report_file="${{ steps.generate.outputs.report_file }}"
           year="${{ steps.generate.outputs.year }}"
@@ -115,7 +125,7 @@ jobs:
           echo "# 📊 HACIE 주간 리포트 생성 완료" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "**리포트 기간:** ${year}년 ${month}월 ${week_num}주차" >> $GITHUB_STEP_SUMMARY
-          echo "**생성 시간:** $(TZ=Asia/Seoul date '+%Y-%m-%d %H:%M:%S') KST" >> $GITHUB_STEP_SUMMARY
+          echo "**생성 시간:** $(date '+%Y-%m-%d %H:%M:%S') KST" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           
           if [ -f "$report_file" ]; then
