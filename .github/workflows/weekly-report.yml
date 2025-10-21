@@ -84,10 +84,10 @@ jobs:
             
             commit_msg="📊 주간 리포트 생성: ${year}년 ${month}월 ${week_num}주차
 
-- 분석 기간: 지난 주 월요일 ~ 일요일
-- 생성 일시: ${kst_date}
-- 자동 생성: GitHub Actions (Weekly Report)"
-            
+            - 분석 기간: 지난 주 월요일 ~ 일요일
+            - 생성 일시: ${kst_date}
+            - 자동 생성: GitHub Actions (Weekly Report)"
+                        
             git commit -m "$commit_msg"
             git push
             

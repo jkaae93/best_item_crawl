@@ -116,10 +116,10 @@ jobs:
             
             commit_msg="📈 월간 리포트 생성: ${year}년 ${month}월
 
-- 총 발견 상품: ${total}개
-- 일평균: ${avg}개
-- 생성 일시: ${kst_date}
-- 자동 생성: GitHub Actions (Monthly Report)"
+            - 총 발견 상품: ${total}개
+            - 일평균: ${avg}개
+            - 생성 일시: ${kst_date}
+            - 자동 생성: GitHub Actions (Monthly Report)"
             
             git commit -m "$commit_msg"
             git push

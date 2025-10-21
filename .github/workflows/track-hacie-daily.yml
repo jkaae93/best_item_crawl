@@ -132,11 +132,11 @@ jobs:
             
             commit_msg="📊 HACIE 일일 순위 추적 (${year}.${month}.${day})
 
-- 발견 상품: ${hacie_count}개
-- 분석 시각: ${kst_date}
-- 파일: output/${year}/${month}/${day}/
+            - 발견 상품: ${hacie_count}개
+            - 분석 시각: ${kst_date}
+            - 파일: output/${year}/${month}/${day}/
 
-자동 생성 by GitHub Actions"
+            자동 생성 by GitHub Actions"
             
             git commit -m "$commit_msg"
             git push
