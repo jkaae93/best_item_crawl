@@ -422,6 +422,25 @@ def pick_rank(idx: int, product: Dict[str, Any]) -> int:
     return idx + 1
 
 
+def pick_url(product: Dict[str, Any]) -> str:
+    """상품 URL 추출"""
+    # landingUrl 또는 직접 URL 필드
+    for key in ("landingUrl", "productUrl", "url", "link", "itemUrl"):
+        if key in product and product[key]:
+            url = str(product[key])
+            if url.startswith("http"):
+                return url
+            elif url.startswith("/"):
+                return f"https://www.wconcept.co.kr{url}"
+    
+    # itemCd, productNo로 URL 생성
+    item_cd = product.get("itemCd") or product.get("productNo") or product.get("itemNo") or product.get("goodsNo")
+    if item_cd:
+        return f"https://www.wconcept.co.kr/product/{item_cd}"
+    
+    return ""
+
+
 def filter_products_by_brand(products: List[Dict[str, Any]], allowed_brands: List[str]) -> List[Dict[str, Any]]:
     if not products:
         return []
@@ -554,17 +573,22 @@ def fetch_all_products_for_category(
     return collected
 
 
-def write_csv(rows: List[List[Any]], output_dir: Path) -> Path:
+def write_csv(rows: List[List[Any]], output_dir: Path, timestamp: datetime) -> Tuple[Path, str]:
+    """CSV 파일 작성 및 타임스탬프 반환"""
     output_dir.mkdir(parents=True, exist_ok=True)
-    now = datetime.now(KST)
-    filename = f"wconcept_best_{now.strftime('%Y%m%d_%H%M')}_KST.csv"
+    
+    # 파일명: yyMMdd_hhmmss.csv
+    time_suffix = timestamp.strftime('%y%m%d_%H%M%S')
+    filename = f"wconcept_best_{time_suffix}.csv"
     out_path = output_dir / filename
-    headers = ["날짜", "시간", "depth1_카테고리", "depth2_카테고리", "순위", "상품명", "가격"]
+    
+    headers = ["날짜", "시간", "브랜드명", "depth1_카테고리", "depth2_카테고리", "순위", "상품명", "가격", "상품URL"]
     with out_path.open("w", newline="", encoding="utf-8") as f:
         writer = csv.writer(f)
         writer.writerow(headers)
         writer.writerows(rows)
-    return out_path
+    
+    return out_path, time_suffix
 
 
 def main():
@@ -685,17 +709,21 @@ def main():
         
         for idx, p in enumerate(filtered):
             rank = pick_rank(idx, p)
+            brand = pick_brand(p)
             name = pick_name(p)
             price = pick_price(p)
+            url = pick_url(p)
             rows.append(
                 [
                     date_str,
                     time_str,
+                    brand,
                     cat.depth1_name or cat.depth1_code,
                     cat.depth2_name or cat.depth2_code,
                     rank,
                     name,
                     price if price is not None else "",
+                    url,
                 ]
             )
     
@@ -707,13 +735,15 @@ def main():
 
     if not rows:
         # Write empty CSV with headers for traceability
-        out = write_csv([], output_dir)
+        out, time_suffix = write_csv([], output_dir, kst_now)
         print(f"✅ CSV 생성 완료 (데이터 없음): {out}")
+        print(f"⏰ 타임스탬프: {time_suffix}")
         return
 
-    out = write_csv(rows, output_dir)
+    out, time_suffix = write_csv(rows, output_dir, kst_now)
     print(f"✅ CSV 생성 완료: {out}")
     print(f"📊 총 {len(rows)}개 상품 수집됨")
+    print(f"⏰ 타임스탬프: {time_suffix}")
 
 
 if __name__ == "__main__":

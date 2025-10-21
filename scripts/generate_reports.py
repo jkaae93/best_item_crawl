@@ -21,7 +21,7 @@ class HacieReportGenerator:
         self.output_dir = output_dir
     
     def find_csv_files(self, start_date: datetime, end_date: datetime) -> List[Path]:
-        """날짜 범위 내의 CSV 파일 찾기"""
+        """날짜 범위 내의 CSV 파일 찾기 (각 날짜별 최신 파일만)"""
         csv_files = []
         
         current_date = start_date
@@ -34,9 +34,15 @@ class HacieReportGenerator:
             date_folder = self.output_dir / year / month / day
             
             if date_folder.exists():
-                # 해당 날짜의 CSV 파일 찾기
-                for csv_file in date_folder.glob('wconcept_best_*.csv'):
-                    csv_files.append(csv_file)
+                # 해당 날짜의 모든 CSV 파일 찾기
+                day_csv_files = list(date_folder.glob('wconcept_best_*.csv'))
+                
+                if day_csv_files:
+                    # 파일명으로 정렬하여 가장 최신(시간이 가장 늦은) 파일만 선택
+                    # 파일명 형식: wconcept_best_yyMMdd_HHMMSS.csv
+                    # 파일명 순으로 정렬하면 자동으로 시간순 정렬됨
+                    latest_file = sorted(day_csv_files, reverse=True)[0]
+                    csv_files.append(latest_file)
             
             current_date += timedelta(days=1)
         
@@ -50,8 +56,17 @@ class HacieReportGenerator:
             with open(csv_file, 'r', encoding='utf-8') as f:
                 reader = csv.DictReader(f)
                 for row in reader:
-                    if row.get('brandName') and ('HACIE' in row['brandName'].upper() or '하시에' in row['brandName']):
+                    # 브랜드명 필드
+                    brand_name = row.get('브랜드명') or row.get('brandName') or ''
+                    
+                    # HACIE 브랜드 필터링
+                    if brand_name and ('HACIE' in brand_name.upper() or '하시에' in brand_name):
                         products.append(row)
+                    else:
+                        # 브랜드 필드 없으면 상품명에서 확인
+                        product_name = row.get('상품명') or row.get('productName') or ''
+                        if product_name and ('HACIE' in product_name.upper() or '하시에' in product_name):
+                            products.append(row)
         except Exception as e:
             print(f"CSV 파싱 에러 ({csv_file}): {e}")
         
@@ -270,6 +285,138 @@ class HacieReportGenerator:
         return {
             'markdown': report,
             'csv': csv_content
+        }
+    
+    def generate_daily_report(self, csv_file_path: Path) -> Optional[Dict[str, str]]:
+        """일일 리포트 생성"""
+        if not csv_file_path.exists():
+            return None
+        
+        # CSV 파일 파싱
+        products = self.parse_csv(csv_file_path)
+        hacie_count = len(products)
+        
+        # 파일 정보 추출
+        csv_name = csv_file_path.name
+        
+        # GitHub 링크 생성
+        try:
+            relative_path = csv_file_path.relative_to(self.output_dir)
+            github_link = f"https://github.com/kaae/best_item_crawl/blob/master/output/{relative_path}"
+        except:
+            github_link = None
+        
+        # 현재 시각
+        now = datetime.now()
+        kst_time = now.strftime('%Y-%m-%d %H:%M:%S')
+        
+        # 리포트 생성
+        if github_link:
+            csv_file_text = f"[`{csv_name}`]({github_link})"
+        else:
+            csv_file_text = f"`{csv_name}`"
+        
+        report = f"""# 📊 일일 요약
+
+**분석 시각:** {kst_time} KST  
+**데이터 파일:** {csv_file_text}  
+**발견된 HACIE 상품:** {hacie_count}개
+
+---
+
+## 📋 상위 10개 상품
+
+"""
+        
+        if hacie_count > 0:
+            # 테이블 헤더
+            report += """| 순위 | 카테고리 | 상품명 | 가격 |
+|:----:|---------|--------|-----:|
+"""
+            
+            # 상위 10개 상품
+            for idx, product in enumerate(products[:10], 1):
+                rank = product.get('순위') or product.get('rank', '-')
+                category = product.get('depth2_카테고리') or product.get('depth2_name', '-')
+                name = product.get('상품명') or product.get('productName', '-')
+                url = product.get('상품URL') or product.get('productUrl', '')
+                
+                # 상품명 길이 제한
+                if len(name) > 50:
+                    name = name[:50] + '...'
+                
+                # 상품명에 링크 추가
+                if url and url.startswith('http'):
+                    name = f"[{name}]({url})"
+                
+                # 가격 포맷팅
+                try:
+                    price = int(product.get('가격') or product.get('salePrice', 0))
+                    price_str = f"₩{price:,}"
+                except:
+                    price_str = product.get('가격') or product.get('salePrice', '-')
+                
+                report += f"| {rank} | {category} | {name} | {price_str} |\n"
+            
+            # 전체 상품 목록
+            report += f"""
+---
+
+## 📦 전체 HACIE 상품 목록
+
+<details>
+<summary>펼쳐서 보기 (전체 {hacie_count}개)</summary>
+
+| 순위 | 카테고리 | 상품명 | 가격 |
+|:----:|---------|--------|-----:|
+"""
+            
+            # 전체 목록
+            for product in products:
+                rank = product.get('순위') or product.get('rank', '-')
+                category = product.get('depth2_카테고리') or product.get('depth2_name', '-')
+                name = product.get('상품명') or product.get('productName', '-')
+                url = product.get('상품URL') or product.get('productUrl', '')
+                
+                # 상품명 길이 제한
+                if len(name) > 60:
+                    name = name[:60] + '...'
+                
+                # 상품명에 링크 추가
+                if url and url.startswith('http'):
+                    name = f"[{name}]({url})"
+                
+                # 가격 포맷팅
+                try:
+                    price = int(product.get('가격') or product.get('salePrice', 0))
+                    price_str = f"₩{price:,}"
+                except:
+                    price_str = product.get('가격') or product.get('salePrice', '-')
+                
+                report += f"| {rank} | {category} | {name} | {price_str} |\n"
+            
+            report += "\n</details>\n"
+        else:
+            report += "\n**HACIE 상품이 발견되지 않았습니다.**\n"
+        
+        # 푸터
+        with open(csv_file_path, 'r', encoding='utf-8') as f:
+            line_count = sum(1 for _ in f)
+        
+        report += f"""
+---
+
+**📈 분석 정보**
+- 총 데이터 행 수: {line_count} 줄
+- CSV 파일: {csv_file_text}
+- 생성 시각: {kst_time} KST
+
+*자동 생성 by GitHub Actions*
+"""
+        
+        return {
+            'markdown': report,
+            'csv': ''
         }
     
     def generate_monthly_report(self, year: int, month: int) -> Optional[Dict[str, str]]:
@@ -590,13 +737,36 @@ def main():
     
     if len(sys.argv) < 2:
         print("사용법:")
+        print("  일일 리포트: python generate_reports.py daily CSV_FILE_PATH OUTPUT_FILE_PATH")
         print("  주간 리포트: python generate_reports.py weekly YYYY MM WEEK")
         print("  월간 리포트: python generate_reports.py monthly YYYY MM")
         sys.exit(1)
     
     report_type = sys.argv[1]
     
-    if report_type == 'weekly':
+    if report_type == 'daily':
+        if len(sys.argv) < 4:
+            print("사용법: python generate_reports.py daily CSV_FILE_PATH OUTPUT_FILE_PATH")
+            sys.exit(1)
+        
+        csv_file_path = Path(sys.argv[2])
+        output_file_path = Path(sys.argv[3])
+        
+        result = generator.generate_daily_report(csv_file_path)
+        
+        if result:
+            # 출력 디렉토리 생성
+            output_file_path.parent.mkdir(parents=True, exist_ok=True)
+            
+            # 마크다운 저장
+            with open(output_file_path, 'w', encoding='utf-8') as f:
+                f.write(result['markdown'])
+            print(f"✓ 일일 리포트 생성: {output_file_path}")
+        else:
+            print("✗ 데이터가 없습니다.")
+            sys.exit(1)
+    
+    elif report_type == 'weekly':
         year = int(sys.argv[2])
         month = int(sys.argv[3])
         week = int(sys.argv[4])
