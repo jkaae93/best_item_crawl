@@ -16,7 +16,6 @@ import requests
 from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 from playwright.sync_api import sync_playwright
 from zoneinfo import ZoneInfo
-from scripts.log_utils import install_global_exception_logger, setup_logging
 
 KST = ZoneInfo("Asia/Seoul")
 BEST_PAGE_URL = (
@@ -432,8 +431,6 @@ def write_csv(rows: List[List[Any]], output_dir: Path) -> Path:
 
 
 def main():
-    logger = setup_logging("wconcept_best_export")
-    install_global_exception_logger(logger)
     parser = argparse.ArgumentParser(description="Export Wconcept best products filtered by keyword to CSV")
     parser.add_argument("--output-dir", default="output", help="CSV 출력 디렉터리")
     parser.add_argument("--page-size", type=int, default=200, help="페이지당 상품 수 (기본 200)")
@@ -449,8 +446,8 @@ def main():
 
     try:
         api_key, categories, base_headers = get_api_key_and_categories()
-    except Exception:
-        logger.exception("카테고리 및 API 키 수집 중 오류 발생")
+    except Exception as e:
+        print(f"❌ 카테고리 및 API 키 수집 중 오류 발생: {e}")
         raise
 
     kst_now = datetime.now(KST)
@@ -468,11 +465,8 @@ def main():
                 base_headers, cat, page_size=page_size, max_pages=max_pages
             )
         except Exception as e:
-            logger.exception(
-                "카테고리 페이지 수집 중 오류: depth1=%s, depth2=%s",
-                cat.depth1_name or cat.depth1_code,
-                cat.depth2_name or cat.depth2_code,
-            )
+            print(f"⚠️  카테고리 페이지 수집 중 오류: depth1={cat.depth1_name or cat.depth1_code}, depth2={cat.depth2_name or cat.depth2_code}")
+            print(f"   에러: {e}")
             continue
         filtered = filter_products_by_brand(products, ALLOWED_BRANDS)
         for idx, p in enumerate(filtered):
@@ -494,11 +488,12 @@ def main():
     if not rows:
         # Write empty CSV with headers for traceability
         out = write_csv([], output_dir)
-        logger.info("CSV 생성 완료 (데이터 없음): %s", out)
+        print(f"✅ CSV 생성 완료 (데이터 없음): {out}")
         return
 
     out = write_csv(rows, output_dir)
-    logger.info("CSV 생성 완료: %s", out)
+    print(f"✅ CSV 생성 완료: {out}")
+    print(f"📊 총 {len(rows)}개 상품 수집됨")
 
 
 if __name__ == "__main__":

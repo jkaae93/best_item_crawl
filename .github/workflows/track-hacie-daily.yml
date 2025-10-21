@@ -12,6 +12,8 @@ permissions:
 jobs:
   track-rankings:
     runs-on: ubuntu-latest
+    container:
+      image: mcr.microsoft.com/playwright/python:v1.40.0-jammy
     
     steps:
       - name: Checkout repository
@@ -19,26 +21,15 @@ jobs:
       
       - name: Cache pip packages
         uses: actions/cache@v4
+        id: pip-cache
         with:
-          path: ~/.cache/pip
+          path: /root/.cache/pip
           key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
           restore-keys: |
             ${{ runner.os }}-pip-
       
-      - name: Cache Playwright browsers
-        uses: actions/cache@v4
-        id: playwright-cache
-        with:
-          path: ~/.cache/ms-playwright
-          key: ${{ runner.os }}-playwright-${{ hashFiles('requirements.txt') }}
-          restore-keys: |
-            ${{ runner.os }}-playwright-
-      
-      - name: Install dependencies
-        run: |
-          pip install -r requirements.txt
-          playwright install chromium
-          playwright install-deps chromium
+      - name: Install Python dependencies
+        run: pip install -r requirements.txt
       
       - name: Run HACIE rankings tracker
         id: track
