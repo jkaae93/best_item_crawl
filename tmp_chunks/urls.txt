@@ -1,2 +1,0 @@
-https://wstatic.wconcept.co.kr/newdisplay/prod/96/_next/static/chunks/polyfills-42372ed130431b0a.js
-https://wstatic.wconcept.co.kr/newdisplay/prod/96/_next/static/chunks/webpack-aede2420e73a5547.js

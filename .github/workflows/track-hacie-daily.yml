@@ -1,0 +1,180 @@
+name: Track HACIE Daily Rankings
+
+on:
+  schedule:
+    # 매일 오전 8시 (KST = UTC+9, 즉 UTC 23시)
+    - cron: '0 23 * * *'
+  workflow_dispatch:  # 수동 실행 가능
+
+permissions:
+  contents: write
+
+jobs:
+  track-rankings:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+      
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          playwright install chromium
+          playwright install-deps chromium
+      
+      - name: Run HACIE rankings tracker
+        id: track
+        run: |
+          python3 scripts/wconcept_best_export.py
+        continue-on-error: false
+      
+      - name: Organize files by date
+        id: organize
+        run: |
+          # KST 기준 날짜
+          year=$(TZ=Asia/Seoul date '+%Y')
+          month=$(TZ=Asia/Seoul date '+%m')
+          day=$(TZ=Asia/Seoul date '+%d')
+          
+          # yyyy/MM/dd 폴더 생성
+          mkdir -p "output/${year}/${month}/${day}"
+          
+          # 최신 CSV 파일 이동
+          if ls output/wconcept_best_*.csv 1> /dev/null 2>&1; then
+            latest_csv=$(ls -t output/wconcept_best_*.csv | head -1)
+            mv "$latest_csv" "output/${year}/${month}/${day}/"
+            
+            echo "year=${year}" >> $GITHUB_OUTPUT
+            echo "month=${month}" >> $GITHUB_OUTPUT
+            echo "day=${day}" >> $GITHUB_OUTPUT
+            echo "file_exists=true" >> $GITHUB_OUTPUT
+            echo "csv_file=output/${year}/${month}/${day}/$(basename $latest_csv)" >> $GITHUB_OUTPUT
+            
+            echo "✓ CSV 파일 이동: output/${year}/${month}/${day}/$(basename $latest_csv)"
+          else
+            echo "file_exists=false" >> $GITHUB_OUTPUT
+            echo "⚠️ CSV 파일이 생성되지 않았습니다."
+          fi
+      
+      - name: Generate daily summary
+        if: steps.organize.outputs.file_exists == 'true'
+        run: |
+          csv_file="${{ steps.organize.outputs.csv_file }}"
+          year="${{ steps.organize.outputs.year }}"
+          month="${{ steps.organize.outputs.month }}"
+          day="${{ steps.organize.outputs.day }}"
+          
+          # 일일 요약 생성
+          summary_file="output/${year}/${month}/${day}/일일_요약.md"
+          
+          # HACIE 상품 개수 계산
+          hacie_count=$(grep -iE "HACIE|하시에" "$csv_file" 2>/dev/null | wc -l | xargs)
+          
+          # 요약 파일 생성
+          cat > "$summary_file" << EOF
+          # 📊 ${year}년 ${month}월 ${day}일 일일 요약
+          
+          **분석 시각:** $(TZ=Asia/Seoul date '+%Y-%m-%d %H:%M KST')
+          
+          ## 주요 지표
+          
+          - **발견된 HACIE 상품:** ${hacie_count}개
+          - **데이터 파일:** \`$(basename $csv_file)\`
+          
+          ## 📋 상위 5개 상품
+          
+          | 순위 | 카테고리 | 상품명 | 가격 |
+          |:----:|---------|--------|-----:|
+          EOF
+          
+          # TOP 5 상품 추출
+          grep -iE "HACIE|하시에" "$csv_file" 2>/dev/null | head -5 | while IFS=',' read -r d1c d1n d2c d2n rank brand name price rest; do
+            echo "| ${rank} | ${d2n} | ${name:0:40} | ${price} |" >> "$summary_file"
+          done || echo "| - | - | 데이터 없음 | - |" >> "$summary_file"
+          
+          cat >> "$summary_file" << EOF
+          
+          ---
+          
+          *자동 생성 by GitHub Actions*
+          EOF
+          
+          echo "✓ 일일 요약 생성: $summary_file"
+      
+      - name: Commit and push results
+        if: steps.organize.outputs.file_exists == 'true'
+        run: |
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+          
+          year="${{ steps.organize.outputs.year }}"
+          month="${{ steps.organize.outputs.month }}"
+          day="${{ steps.organize.outputs.day }}"
+          csv_file="${{ steps.organize.outputs.csv_file }}"
+          
+          # 모든 파일 추가
+          git add output/${year}/${month}/${day}/
+          
+          if git diff --staged --quiet; then
+            echo "변경사항이 없습니다."
+          else
+            # HACIE 상품 수 계산
+            hacie_count=$(grep -iE "HACIE|하시에" "$csv_file" 2>/dev/null | wc -l | xargs)
+            
+            kst_date=$(TZ=Asia/Seoul date '+%Y년 %m월 %d일 %H시')
+            
+            commit_msg="📊 HACIE 일일 순위 추적 (${year}.${month}.${day})
+
+- 발견 상품: ${hacie_count}개
+- 분석 시각: ${kst_date}
+- 파일: output/${year}/${month}/${day}/
+
+자동 생성 by GitHub Actions"
+            
+            git commit -m "$commit_msg"
+            git push
+            
+            echo "✓ 커밋 완료: ${hacie_count}개 상품"
+          fi
+      
+      - name: Create summary
+        if: steps.organize.outputs.file_exists == 'true'
+        run: |
+          csv_file="${{ steps.organize.outputs.csv_file }}"
+          year="${{ steps.organize.outputs.year }}"
+          month="${{ steps.organize.outputs.month }}"
+          day="${{ steps.organize.outputs.day }}"
+          
+          hacie_count=$(grep -iE "HACIE|하시에" "$csv_file" 2>/dev/null | wc -l | xargs)
+          
+          echo "# 🏆 HACIE 일일 순위 추적 결과" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**날짜:** ${year}년 ${month}월 ${day}일" >> $GITHUB_STEP_SUMMARY
+          echo "**분석 시각:** $(TZ=Asia/Seoul date '+%Y-%m-%d %H:%M:%S') KST" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**발견된 HACIE 상품:** ${hacie_count}개" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          if [ $hacie_count -gt 0 ]; then
+            echo "## 📋 상위 10개 상품" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo '```csv' >> $GITHUB_STEP_SUMMARY
+            head -1 "$csv_file" >> $GITHUB_STEP_SUMMARY
+            grep -iE "HACIE|하시에" "$csv_file" 2>/dev/null | head -10 >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+          fi
+      
+      - name: Upload results as artifact
+        if: steps.organize.outputs.file_exists == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: daily-rankings-${{ steps.organize.outputs.year }}-${{ steps.organize.outputs.month }}-${{ steps.organize.outputs.day }}
+          path: output/${{ steps.organize.outputs.year }}/${{ steps.organize.outputs.month }}/${{ steps.organize.outputs.day }}/
+          retention-days: 90

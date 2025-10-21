@@ -1,0 +1,165 @@
+name: Generate Monthly Report
+
+on:
+  schedule:
+    # 매월 1일 오전 8시 (KST = UTC 23시, 전날 23시)
+    - cron: '0 23 L * *'
+  workflow_dispatch:  # 수동 실행 가능
+    inputs:
+      target_year:
+        description: '대상 연도 (예: 2025)'
+        required: false
+      target_month:
+        description: '대상 월 (예: 10)'
+        required: false
+
+permissions:
+  contents: write
+
+jobs:
+  monthly-report:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # 전체 히스토리 가져오기
+      
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      
+      - name: Calculate target month
+        id: calc
+        run: |
+          if [ -n "${{ github.event.inputs.target_year }}" ] && [ -n "${{ github.event.inputs.target_month }}" ]; then
+            # 수동 실행: 입력받은 연월 사용
+            year="${{ github.event.inputs.target_year }}"
+            month="${{ github.event.inputs.target_month }}"
+          else
+            # 자동 실행: 전월 계산 (KST 기준)
+            # 오늘이 1일이므로 전월을 계산
+            current_date=$(TZ=Asia/Seoul date '+%Y-%m-01')
+            prev_month=$(TZ=Asia/Seoul date -d "$current_date -1 day" '+%Y %m')
+            year=$(echo $prev_month | cut -d' ' -f1)
+            month=$(echo $prev_month | cut -d' ' -f2)
+          fi
+          
+          # 앞의 0 제거 (Python에서 사용하기 위해)
+          month_num=$((10#$month))
+          
+          echo "year=${year}" >> $GITHUB_OUTPUT
+          echo "month=${month}" >> $GITHUB_OUTPUT
+          echo "month_num=${month_num}" >> $GITHUB_OUTPUT
+          
+          echo "대상 기간: ${year}년 ${month}월"
+      
+      - name: Generate monthly report
+        id: generate
+        run: |
+          year="${{ steps.calc.outputs.year }}"
+          month="${{ steps.calc.outputs.month }}"
+          month_num="${{ steps.calc.outputs.month_num }}"
+          
+          # 리포트 생성
+          python3 scripts/generate_reports.py monthly ${year} ${month_num}
+          
+          # 생성된 파일 확인
+          report_file="output/${year}/${month}/${year}년_${month}월_월간통계.md"
+          
+          if [ -f "$report_file" ]; then
+            echo "report_exists=true" >> $GITHUB_OUTPUT
+            echo "report_file=${report_file}" >> $GITHUB_OUTPUT
+            echo "✓ 월간 리포트 생성 완료: $report_file"
+            
+            # 리포트에서 주요 지표 추출
+            total_products=$(grep -oP '총 발견 상품:\s*\K\d+' "$report_file" || echo "0")
+            avg_per_day=$(grep -oP '일평균 상품 수:\s*\K[\d.]+' "$report_file" || echo "0")
+            
+            echo "total_products=${total_products}" >> $GITHUB_OUTPUT
+            echo "avg_per_day=${avg_per_day}" >> $GITHUB_OUTPUT
+          else
+            echo "report_exists=false" >> $GITHUB_OUTPUT
+            echo "⚠️ 월간 리포트 생성 실패 (데이터 부족 가능성)"
+          fi
+      
+      - name: Display report summary
+        if: steps.generate.outputs.report_exists == 'true'
+        run: |
+          report_file="${{ steps.generate.outputs.report_file }}"
+          
+          echo "=== 월간 리포트 요약 ==="
+          if [ -f "$report_file" ]; then
+            head -50 "$report_file"
+          fi
+      
+      - name: Commit and push monthly report
+        if: steps.generate.outputs.report_exists == 'true'
+        run: |
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+          
+          year="${{ steps.calc.outputs.year }}"
+          month="${{ steps.calc.outputs.month }}"
+          total="${{ steps.generate.outputs.total_products }}"
+          avg="${{ steps.generate.outputs.avg_per_day }}"
+          
+          git add output/${year}/${month}/*월간통계.md
+          git add output/${year}/${month}/*월간통계.csv
+          
+          if git diff --staged --quiet; then
+            echo "변경사항이 없습니다."
+          else
+            kst_date=$(TZ=Asia/Seoul date '+%Y년 %m월 %d일')
+            
+            commit_msg="📈 월간 리포트 생성: ${year}년 ${month}월
+
+- 총 발견 상품: ${total}개
+- 일평균: ${avg}개
+- 생성 일시: ${kst_date}
+- 자동 생성: GitHub Actions (Monthly Report)"
+            
+            git commit -m "$commit_msg"
+            git push
+            
+            echo "✓ 월간 리포트 커밋 완료"
+          fi
+      
+      - name: Create summary
+        if: steps.generate.outputs.report_exists == 'true'
+        run: |
+          report_file="${{ steps.generate.outputs.report_file }}"
+          year="${{ steps.calc.outputs.year }}"
+          month="${{ steps.calc.outputs.month }}"
+          total="${{ steps.generate.outputs.total_products }}"
+          avg="${{ steps.generate.outputs.avg_per_day }}"
+          
+          echo "# 📈 HACIE 월간 리포트 생성 완료" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**리포트 기간:** ${year}년 ${month}월" >> $GITHUB_STEP_SUMMARY
+          echo "**생성 시간:** $(TZ=Asia/Seoul date '+%Y-%m-%d %H:%M:%S') KST" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "## 📊 주요 지표" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- **총 발견 상품:** ${total}개" >> $GITHUB_STEP_SUMMARY
+          echo "- **일평균 상품:** ${avg}개" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          if [ -f "$report_file" ]; then
+            echo "## 📋 리포트 미리보기" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            head -60 "$report_file" >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+          fi
+      
+      - name: Upload report as artifact
+        if: steps.generate.outputs.report_exists == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: monthly-report-${{ steps.calc.outputs.year }}-${{ steps.calc.outputs.month }}
+          path: ${{ steps.generate.outputs.report_file }}
+          retention-days: 730  # 2년 보관
+

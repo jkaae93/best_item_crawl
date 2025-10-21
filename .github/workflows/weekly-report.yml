@@ -1,0 +1,126 @@
+name: Generate Weekly Report
+
+on:
+  schedule:
+    # 매주 월요일 오전 8시 (KST = UTC 23시, 일요일)
+    - cron: '0 23 * * 0'
+  workflow_dispatch:  # 수동 실행 가능
+
+permissions:
+  contents: write
+
+jobs:
+  weekly-report:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # 전체 히스토리 가져오기
+      
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      
+      - name: Generate weekly report
+        id: generate
+        run: |
+          # KST 기준 오늘 날짜 (월요일)
+          year=$(TZ=Asia/Seoul date '+%Y')
+          month=$(TZ=Asia/Seoul date '+%m')
+          day=$(TZ=Asia/Seoul date '+%d')
+          
+          # 주차 계산 (해당 월의 몇 번째 주인지)
+          week_num=$(( ($(TZ=Asia/Seoul date '+%d') - 1) / 7 + 1 ))
+          
+          echo "year=${year}" >> $GITHUB_OUTPUT
+          echo "month=${month}" >> $GITHUB_OUTPUT
+          echo "week_num=${week_num}" >> $GITHUB_OUTPUT
+          
+          # 리포트 생성
+          python3 scripts/generate_reports.py weekly ${year} ${month#0} ${week_num}
+          
+          # 생성된 파일 확인
+          report_file="output/${year}/${month}/${year}년_${month}월_${week_num}주차_통계.md"
+          
+          if [ -f "$report_file" ]; then
+            echo "report_exists=true" >> $GITHUB_OUTPUT
+            echo "report_file=${report_file}" >> $GITHUB_OUTPUT
+            echo "✓ 주간 리포트 생성 완료: $report_file"
+          else
+            echo "report_exists=false" >> $GITHUB_OUTPUT
+            echo "⚠️ 주간 리포트 생성 실패 (데이터 부족 가능성)"
+          fi
+      
+      - name: Display report summary
+        if: steps.generate.outputs.report_exists == 'true'
+        run: |
+          report_file="${{ steps.generate.outputs.report_file }}"
+          
+          echo "=== 주간 리포트 요약 ==="
+          if [ -f "$report_file" ]; then
+            head -30 "$report_file"
+          fi
+      
+      - name: Commit and push weekly report
+        if: steps.generate.outputs.report_exists == 'true'
+        run: |
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+          
+          year="${{ steps.generate.outputs.year }}"
+          month="${{ steps.generate.outputs.month }}"
+          week_num="${{ steps.generate.outputs.week_num }}"
+          
+          git add output/${year}/${month}/*주차_통계.md
+          git add output/${year}/${month}/*주차_통계.csv
+          
+          if git diff --staged --quiet; then
+            echo "변경사항이 없습니다."
+          else
+            kst_date=$(TZ=Asia/Seoul date '+%Y년 %m월 %d일')
+            
+            commit_msg="📊 주간 리포트 생성: ${year}년 ${month}월 ${week_num}주차
+
+- 분석 기간: 지난 주 월요일 ~ 일요일
+- 생성 일시: ${kst_date}
+- 자동 생성: GitHub Actions (Weekly Report)"
+            
+            git commit -m "$commit_msg"
+            git push
+            
+            echo "✓ 주간 리포트 커밋 완료"
+          fi
+      
+      - name: Create summary
+        if: steps.generate.outputs.report_exists == 'true'
+        run: |
+          report_file="${{ steps.generate.outputs.report_file }}"
+          year="${{ steps.generate.outputs.year }}"
+          month="${{ steps.generate.outputs.month }}"
+          week_num="${{ steps.generate.outputs.week_num }}"
+          
+          echo "# 📊 HACIE 주간 리포트 생성 완료" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**리포트 기간:** ${year}년 ${month}월 ${week_num}주차" >> $GITHUB_STEP_SUMMARY
+          echo "**생성 시간:** $(TZ=Asia/Seoul date '+%Y-%m-%d %H:%M:%S') KST" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          if [ -f "$report_file" ]; then
+            echo "## 📋 리포트 미리보기" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            head -40 "$report_file" >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+          fi
+      
+      - name: Upload report as artifact
+        if: steps.generate.outputs.report_exists == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: weekly-report-${{ steps.generate.outputs.year }}-${{ steps.generate.outputs.month }}-week${{ steps.generate.outputs.week_num }}
+          path: ${{ steps.generate.outputs.report_file }}
+          retention-days: 365
+
