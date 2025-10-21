@@ -24,22 +24,31 @@ W컨셉(Wconcept) 베스트 페이지에서 **HACIE (하시에)** 브랜드의 �
 ## 📁 폴더 구조
 
 ```
-output/
-├── 2025/
-│   ├── 10/
-│   │   ├── 21/
-│   │   │   ├── wconcept_best_20251021_0800_KST.csv     # 원본 데이터
-│   │   │   └── 일일_요약.md                             # 일일 요약
-│   │   ├── 22/
-│   │   │   ├── wconcept_best_20251022_0800_KST.csv
-│   │   │   └── 일일_요약.md
-│   │   ├── 2025년_10월_1주차_통계.md                    # 주간 리포트
-│   │   ├── 2025년_10월_2주차_통계.md
-│   │   └── 2025년_10월_월간통계.md                      # 월간 리포트 (다음 달 1일 생성)
-│   └── 11/
-│       ├── 01/
-│       └── 2025년_11월_1주차_통계.md
-└── README.md
+best_item_crawl/
+├── data/
+│   ├── category.json                  # 카테고리 캐시 (75개 조합)
+│   └── README.md
+├── output/
+│   ├── 2025/
+│   │   ├── 10/
+│   │   │   ├── 21/
+│   │   │   │   ├── wconcept_best_20251021_0800_KST.csv     # 원본 데이터
+│   │   │   │   └── 일일_요약.md                             # 일일 요약
+│   │   │   ├── 22/
+│   │   │   │   ├── wconcept_best_20251022_0800_KST.csv
+│   │   │   │   └── 일일_요약.md
+│   │   │   ├── 2025년_10월_1주차_통계.md                    # 주간 리포트
+│   │   │   ├── 2025년_10월_2주차_통계.md
+│   │   │   └── 2025년_10월_월간통계.md                      # 월간 리포트
+│   │   └── 11/
+│   │       ├── 01/
+│   │       └── 2025년_11월_1주차_통계.md
+│   └── README.md
+├── scripts/
+│   ├── wconcept_best_export.py        # 메인 크롤링
+│   ├── generate_reports.py            # 리포트 생성
+│   └── ...
+└── requirements.txt
 ```
 
 ## 🔄 자동 실행 스케줄
@@ -57,7 +66,7 @@ output/
 
 1. **저장소 방문**
    ```
-   https://github.com/[사용자명]/best_item_crawl
+   https://github.com/kaae/best_item_crawl
    ```
 
 2. **최신 데이터 확인**
@@ -67,23 +76,28 @@ output/
 
 3. **주간/월간 리포트**
    - `output/2025/10/` 폴더에서 리포트 확인
-   - `*주차_통계.md`: 주간 분석
-   - `*월간통계.md`: 월간 종합 분석
+   - `*주차_통계.md`: 주간 분석 + 참고 데이터 파일 링크
+   - `*월간통계.md`: 월간 종합 분석 + 참고 데이터 파일 링크
 
 ### 로컬 실행 (개발자용)
 
 ```bash
 # 1. 의존성 설치
 pip install -r requirements.txt
-playwright install chromium
 
-# 2. 일일 크롤링 실행
+# 2. 일일 크롤링 실행 (빠른 모드 - 권장)
+python3 scripts/wconcept_best_export.py --skip-category-update
+
+# 3. 일일 크롤링 실행 (카테고리 업데이트 포함)
 python3 scripts/wconcept_best_export.py
 
-# 3. 주간 리포트 생성
+# 4. 테스트 실행 (3개 카테고리만)
+python3 scripts/wconcept_best_export.py --skip-category-update --test-mode
+
+# 5. 주간 리포트 생성
 python3 scripts/generate_reports.py weekly 2025 10 3
 
-# 4. 월간 리포트 생성
+# 6. 월간 리포트 생성
 python3 scripts/generate_reports.py monthly 2025 10
 ```
 
@@ -93,16 +107,13 @@ python3 scripts/generate_reports.py monthly 2025 10
 
 | 컬럼명 | 설명 | 예시 |
 |--------|------|------|
-| `depth1_code` | 메인 카테고리 코드 | `10101` |
-| `depth1_name` | 메인 카테고리명 | `의류` |
-| `depth2_code` | 서브 카테고리 코드 | `10101201` |
-| `depth2_name` | 서브 카테고리명 | `아우터` |
-| `rank` | 순위 (작을수록 높음) | `5` |
-| `brandName` | 브랜드명 | `HACIE` |
-| `productName` | 상품명 | `울 블렌드 코트` |
-| `salePrice` | 판매가 | `298000` |
-| `discountRate` | 할인율 | `15` |
-| `productUrl` | 상품 URL | `https://...` |
+| `날짜` | 수집 날짜 | `2025-10-21` |
+| `시간` | 수집 시간 | `08:00` |
+| `depth1_카테고리` | 메인 카테고리명 | `의류` |
+| `depth2_카테고리` | 서브 카테고리명 | `아우터` |
+| `순위` | 베스트 순위 | `13` |
+| `상품명` | 상품명 | `CASHMERE COLLAR LIGHT DOWN JACKET` |
+| `가격` | 최종 판매가 | `114988` |
 
 ### 리포트 종류
 
@@ -116,6 +127,7 @@ python3 scripts/generate_reports.py monthly 2025 10
 - 일별 추이
 - 카테고리별 통계
 - 주간 베스트 TOP 10
+- **참고 데이터 파일 링크** (클릭 가능)
 - 자동 인사이트 및 추천 액션
 
 **3. 월간 통계** (`yyyy년_MM월_월간통계.md`)
@@ -125,6 +137,7 @@ python3 scripts/generate_reports.py monthly 2025 10
 - 월간 베스트 TOP 20
 - 가격대 분석
 - 성과 평가 (S/A/B/C 등급)
+- **참고 데이터 파일 링크** (클릭 가능)
 - 다음 달 액션 플랜
 
 ## 🎯 마케팅 활용 가이드
@@ -245,28 +258,49 @@ python3 scripts/generate_reports.py monthly 2025 10
 - 자동 생성: GitHub Actions (Monthly Report)
 ```
 
-## 📊 주요 카테고리 코드
+## 📊 주요 카테고리
 
-| 코드 | 이름 | 서브 카테고리 수 |
-|------|------|:----------------:|
-| ALL | 전체 | - |
-| 10101 | 의류 | 12개 |
-| 10102 | 가방 | 10개 |
-| 10103 | 신발 | 11개 |
-| 10104 | 액세서리 | 9개 |
-| 10107 | 뷰티 | 8개 |
-| 10108 | 라이프 | 5개 |
+### 수집 범위 (총 75개 카테고리 조합)
 
-전체 카테고리 목록: [`tmp_wconcept_best_categories.json`](tmp_wconcept_best_categories.json)
+| Depth1 | 이름 | Depth2 개수 |
+|--------|------|:-----------:|
+| ALL | 전체 | 1개 |
+| 10101 | 의류 | 13개 (전체 포함) |
+| 10102 | 가방 | 10개 (전체 포함) |
+| 10103 | 신발 | 11개 (전체 포함) |
+| 10104 | 액세서리 | 9개 (전체 포함) |
+| 10107 | 뷰티 | 9개 (전체 포함) |
+| 10108 | 라이프 | 6개 (전체 포함) |
+| 10109 | 키즈 | 7개 (전체 포함) |
+| 10106 | 레저 | 5개 (전체 포함) |
+| 10105 | 해외브랜드 | 5개 (전체 포함) |
+
+**전체 카테고리 목록**: [`data/category.json`](data/category.json)
+
+### 카테고리 자동 업데이트
+
+- 매 실행 시 W컨셉 베스트 페이지에서 최신 카테고리 추출
+- `data/category.json`과 비교하여 변경 시 자동 업데이트
+- `--skip-category-update` 옵션으로 캐시만 사용 가능 (빠름)
 
 ## 🛠️ 스크립트 설명
 
 | 파일 | 용도 |
 |------|------|
-| `scripts/wconcept_best_export.py` | 메인 크롤링 스크립트 (Playwright) |
-| `scripts/generate_reports.py` | 주간/월간 리포트 생성 |
-| `scripts/extract_best_categories.py` | 카테고리 구조 추출 |
-| `scripts/log_utils.py` | 로깅 유틸리티 |
+| `scripts/wconcept_best_export.py` | 메인 크롤링 스크립트 |
+| `scripts/generate_reports.py` | 주간/월간 리포트 생성 (Python 표준 라이브러리만 사용) |
+| `scripts/extract_best_categories.py` | 카테고리 구조 추출 (참고용) |
+| `scripts/manage_categories.py` | 카테고리 관리 유틸리티 (참고용) |
+| `data/category.json` | 카테고리 캐시 (자동 생성/업데이트) |
+
+### 주요 옵션
+
+| 옵션 | 설명 | 사용 예시 |
+|------|------|----------|
+| `--skip-category-update` | Playwright 건너뛰고 캐시만 사용 (빠름) | `--skip-category-update` |
+| `--test-mode` | 처음 3개 카테고리만 테스트 | `--test-mode` |
+| `--max-pages N` | 카테고리당 최대 N페이지 수집 | `--max-pages 2` |
+| `--page-size N` | 페이지당 상품 수 | `--page-size 200` |
 
 ## ❓ 문제 해결
 
@@ -274,22 +308,43 @@ python3 scripts/generate_reports.py monthly 2025 10
 → Actions 탭에서 워크플로우 실행 상태 확인
 
 **Q2. CSV 파일이 비어있어요**
-→ 해당 날짜에 HACIE 상품이 베스트 200위 안에 없었을 수 있습니다
+→ 해당 날짜에 HACIE 상품이 베스트에 없었을 수 있습니다
 
 **Q3. 주간/월간 리포트가 생성 안 돼요**
 → 데이터가 충분하지 않을 수 있습니다 (최소 3일 이상 필요)
 
-**Q4. 폴더 구조를 변경하고 싶어요**
-→ `.github/workflows/track-hacie-daily.yml` 파일 수정
+**Q4. 500 에러가 발생해요**
+→ 일시적인 서버 에러입니다. 재시도 로직이 자동으로 작동합니다.
 
-**Q5. 다른 브랜드도 추적하고 싶어요**
+**Q5. 카테고리를 수동으로 업데이트하고 싶어요**
+→ `--skip-category-update` 옵션 없이 실행하면 자동 업데이트됩니다.
+
+**Q6. 다른 브랜드도 추적하고 싶어요**
 → `scripts/wconcept_best_export.py`의 `ALLOWED_BRANDS` 수정
+
+**Q7. 더 빠르게 실행하고 싶어요**
+→ `--skip-category-update` 옵션 사용 (Playwright 건너뛰기)
+
+## 🔧 기술 스택
+
+- **Python 3.10+**: 메인 스크립트
+- **Playwright**: 웹 스크래핑 (선택적 - 카테고리 업데이트 시만)
+- **Requests**: HTTP API 호출
+- **GitHub Actions**: 자동 실행 (Docker 컨테이너)
+- **Docker**: `mcr.microsoft.com/playwright/python:v1.55.0-jammy`
+
+### 성능 최적화
+
+- ✅ **캐시 시스템**: `data/category.json`으로 Playwright 실행 최소화
+- ✅ **Docker 이미지**: Playwright 사전 설치로 빠른 실행
+- ✅ **재시도 로직**: 일시적 API 에러 자동 복구
+- ✅ **Git 충돌 방지**: 자동 fetch/merge/push 재시도
 
 ## 🔗 관련 링크
 
 - [W컨셉 베스트 페이지](https://display.wconcept.co.kr/rn/best)
 - [GitHub Actions 문서](https://docs.github.com/en/actions)
-- [Playwright 문서](https://playwright.dev/python/)
+- [Playwright Python](https://playwright.dev/python/)
 
 ## 📝 라이선스
 
@@ -303,4 +358,4 @@ MIT License
 
 **Made with ❤️ for HACIE Brand Analytics**
 
-*최종 업데이트: 2025-10-21*
+*최종 업데이트: 2025-10-22*
