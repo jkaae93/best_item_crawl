@@ -25,7 +25,7 @@ BEST_PAGE_URL = (
 CATEGORY_ENDPOINT_SUBSTR = "/display/api/best/v1/product"
 PRODUCT_ENDPOINT = "https://gw-front.wconcept.co.kr/display/api/best/v1/product"
 
-KEYWORDS = ["하시에", "hacie"]
+ALLOWED_BRANDS = ["하시에", "HACIE"]
 
 
 @dataclass(frozen=True)
@@ -285,16 +285,21 @@ def pick_rank(idx: int, product: Dict[str, Any]) -> int:
     return idx + 1
 
 
-def filter_products(products: List[Dict[str, Any]], keywords: List[str]) -> List[Dict[str, Any]]:
+def filter_products_by_brand(products: List[Dict[str, Any]], allowed_brands: List[str]) -> List[Dict[str, Any]]:
     if not products:
         return []
-    pattern = re.compile("(" + "|".join(re.escape(k) for k in keywords) + ")", re.IGNORECASE)
+    allowed_exact_korean = {b.strip() for b in allowed_brands if b.strip() and not b.strip().isascii()}
+    allowed_english_casefold = {b.strip().casefold() for b in allowed_brands if b.strip() and b.strip().isascii()}
+
     filtered: List[Dict[str, Any]] = []
     for p in products:
-        name = pick_name(p)
-        brand = pick_brand(p)
-        text = f"{name} {brand}".strip()
-        if pattern.search(text):
+        brand = pick_brand(p).strip()
+        if not brand:
+            continue
+        if brand in allowed_exact_korean:
+            filtered.append(p)
+            continue
+        if brand.casefold() in allowed_english_casefold:
             filtered.append(p)
     return filtered
 
@@ -449,7 +454,7 @@ def main():
                 }
             )
             continue
-        filtered = filter_products(products, KEYWORDS)
+        filtered = filter_products_by_brand(products, ALLOWED_BRANDS)
         for idx, p in enumerate(filtered):
             rank = pick_rank(idx, p)
             name = pick_name(p)
