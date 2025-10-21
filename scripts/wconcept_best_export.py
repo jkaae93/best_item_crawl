@@ -62,54 +62,113 @@ def iter_dicts(obj: Any) -> Iterable[Dict[str, Any]]:
 def extract_category_pairs(categories_json: Dict[str, Any]) -> List[CategoryPair]:
     pairs: List[CategoryPair] = []
 
-    # Prefer explicit key if present
-    candidate_arrays = find_key_recursive(categories_json, "bestCategories")
-    if not candidate_arrays:
-        candidate_arrays = find_key_recursive(categories_json, "categories")
-
-    for arr in candidate_arrays:
-        if not isinstance(arr, list):
-            continue
-        for group in arr:
-            if not isinstance(group, dict):
-                continue
-            d1_code = str(
-                group.get("depth1Code")
-                or group.get("depth1Cd")
-                or group.get("d1Code")
-                or group.get("code")
-                or ""
-            )
-            d1_name = str(
-                group.get("depth1Name")
-                or group.get("d1Name")
-                or group.get("name")
-                or ""
-            )
-            if not d1_code:
-                # Try to find a depth1 code in any nested object
-                for d in iter_dicts(group):
-                    cand = d.get("depth1Code") or d.get("depth1Cd") or d.get("d1Code")
-                    if cand:
-                        d1_code = str(cand)
-                        d1_name = str(d.get("depth1Name") or d.get("d1Name") or d.get("name") or d1_name)
-                        break
-
-            # Collect all depth2 entries under this group
-            for d in iter_dicts(group):
-                d2_code = d.get("depth2Code") or d.get("depth2Cd") or d.get("d2Code")
-                if not d2_code:
+    # bestCategories.category1DepthList 구조 처리 (Next.js __NEXT_DATA__)
+    best_categories = categories_json.get("bestCategories", {})
+    if best_categories and isinstance(best_categories, dict):
+        category1_depth_list = best_categories.get("category1DepthList", [])
+        
+        if category1_depth_list and isinstance(category1_depth_list, list):
+            print(f"   🎯 bestCategories 발견: {len(category1_depth_list)}개 depth1")
+            
+            for depth1_item in category1_depth_list:
+                if not isinstance(depth1_item, dict):
                     continue
-                d2_name = str(d.get("depth2Name") or d.get("d2Name") or d.get("name") or "")
-                if d1_code:
-                    pairs.append(
-                        CategoryPair(
-                            depth1_code=str(d1_code),
-                            depth1_name=d1_name,
-                            depth2_code=str(d2_code),
-                            depth2_name=d2_name,
+                
+                d1_code = str(depth1_item.get("depth1Code", ""))
+                d1_name = str(depth1_item.get("depth1Name", ""))
+                
+                # category2DepthList에서 depth2 추출 (null일 수도 있음)
+                category2_depth_list = depth1_item.get("category2DepthList")
+                
+                # category2DepthList가 null인 경우 (최상위 전체)
+                if category2_depth_list is None and d1_code == "ALL":
+                    pairs.append(CategoryPair(d1_code, d1_name, "ALL", "전체"))
+                elif category2_depth_list and isinstance(category2_depth_list, list):
+                    # 일반적인 경우: depth2 목록 순회
+                    for depth2_item in category2_depth_list:
+                        if not isinstance(depth2_item, dict):
+                            continue
+                        
+                        d2_code = str(depth2_item.get("depth2Code", ""))
+                        d2_name = str(depth2_item.get("depth2Name", ""))
+                        
+                        if d1_code and d2_code:
+                            pairs.append(CategoryPair(d1_code, d1_name, d2_code, d2_name))
+    
+    # lnbInfo 구조 처리 (Next.js initialData - 대체 방법)
+    if not pairs:
+        lnb_info = categories_json.get("lnbInfo", [])
+        if lnb_info and isinstance(lnb_info, list):
+            for depth1_group in lnb_info:
+                if not isinstance(depth1_group, dict):
+                    continue
+                
+                # depth1 정보
+                d1_code = str(depth1_group.get("largeCategory") or depth1_group.get("depth1Code") or "")
+                d1_name = str(depth1_group.get("mediumName") or depth1_group.get("mediumKorName") or depth1_group.get("depth1Name") or "")
+                
+                # categoryDetail이나 subCategories에서 depth2 추출
+                sub_categories = depth1_group.get("categoryDetail", []) or depth1_group.get("subCategories", [])
+                
+                for depth2_item in sub_categories:
+                    if not isinstance(depth2_item, dict):
+                        continue
+                        
+                    d2_code = str(depth2_item.get("middleCategory") or depth2_item.get("depth2Code") or "")
+                    d2_name = str(depth2_item.get("categoryName") or depth2_item.get("depth2Name") or "")
+                    
+                    if d1_code and d2_code:
+                        pairs.append(CategoryPair(d1_code, d1_name, d2_code, d2_name))
+    
+    # 기존 로직: bestCategories 키 찾기 (재귀 검색)
+    if not pairs:
+        candidate_arrays = find_key_recursive(categories_json, "bestCategories")
+        if not candidate_arrays:
+            candidate_arrays = find_key_recursive(categories_json, "categories")
+
+        for arr in candidate_arrays:
+            if not isinstance(arr, list):
+                continue
+            for group in arr:
+                if not isinstance(group, dict):
+                    continue
+                d1_code = str(
+                    group.get("depth1Code")
+                    or group.get("depth1Cd")
+                    or group.get("d1Code")
+                    or group.get("code")
+                    or ""
+                )
+                d1_name = str(
+                    group.get("depth1Name")
+                    or group.get("d1Name")
+                    or group.get("name")
+                    or ""
+                )
+                if not d1_code:
+                    # Try to find a depth1 code in any nested object
+                    for d in iter_dicts(group):
+                        cand = d.get("depth1Code") or d.get("depth1Cd") or d.get("d1Code")
+                        if cand:
+                            d1_code = str(cand)
+                            d1_name = str(d.get("depth1Name") or d.get("d1Name") or d.get("name") or d1_name)
+                            break
+
+                # Collect all depth2 entries under this group
+                for d in iter_dicts(group):
+                    d2_code = d.get("depth2Code") or d.get("depth2Cd") or d.get("d2Code")
+                    if not d2_code:
+                        continue
+                    d2_name = str(d.get("depth2Name") or d.get("d2Name") or d.get("name") or "")
+                    if d1_code:
+                        pairs.append(
+                            CategoryPair(
+                                depth1_code=str(d1_code),
+                                depth1_name=d1_name,
+                                depth2_code=str(d2_code),
+                                depth2_name=d2_name,
+                            )
                         )
-                    )
 
     # Deduplicate by (d1, d2)
     unique: Dict[Tuple[str, str], CategoryPair] = {}
@@ -121,89 +180,150 @@ def extract_category_pairs(categories_json: Dict[str, Any]) -> List[CategoryPair
 
 
 def get_api_key_and_categories(timeout_ms: int = 25000) -> Tuple[str, List[CategoryPair], Dict[str, str]]:
+    """베스트 페이지에서 __NEXT_DATA__를 통해 카테고리 추출"""
+    
+    pairs: List[CategoryPair] = []
+    captured_headers: Dict[str, str] = {}
+    
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         context = browser.new_context(locale="ko-KR", timezone_id="Asia/Seoul")
         page = context.new_page()
 
-        api_key: Optional[str] = None
-        captured_headers: Dict[str, str] = {}
-        seed_products: Optional[List[Dict[str, Any]]] = None
-
         def on_response(response):
-            nonlocal api_key, captured_headers, seed_products
+            nonlocal captured_headers
             url = response.url
-            if CATEGORY_ENDPOINT_SUBSTR in url and seed_products is None:
-                # 상품 응답을 받아 리스트 구조를 확보한다
-                try:
-                    data = response.json()
-                except Exception:
-                    data = None
-                if isinstance(data, dict):
-                    seed_products = extract_products_list(data)
-                # 요청 헤더에서 x-api-key 등도 함께 확보 (없어도 동작할 수 있음)
+            
+            # 상품 API에서 헤더 추출
+            if CATEGORY_ENDPOINT_SUBSTR in url:
                 try:
                     req = response.request
                     headers = req.headers or {}
                     captured_headers = {k.lower(): v for k, v in headers.items()}
-                    api_key = (
-                        captured_headers.get("x-api-key")
-                        or captured_headers.get("x-api_key")
-                        or captured_headers.get("x-apikey")
-                    )
                 except Exception:
                     pass
 
         page.on("response", on_response)
-
+        
+        print("🔍 베스트 페이지에서 __NEXT_DATA__ 추출...")
+        
         try:
             page.goto(BEST_PAGE_URL, wait_until="networkidle", timeout=timeout_ms)
-            # Give a moment for any late XHR
-            page.wait_for_timeout(1000)
-        except PlaywrightTimeoutError:
-            # Try DOMContentLoaded fallback
-            page.goto(BEST_PAGE_URL, wait_until="domcontentloaded", timeout=timeout_ms)
-            page.wait_for_timeout(1500)
+            page.wait_for_timeout(2000)
+            
+            # __NEXT_DATA__에서 bestCategories 추출
+            next_data = page.evaluate("""
+                () => {
+                    const nextDataScript = document.getElementById('__NEXT_DATA__');
+                    if (nextDataScript && nextDataScript.textContent) {
+                        try {
+                            const data = JSON.parse(nextDataScript.textContent);
+                            const initialData = data?.props?.pageProps?.initialData;
+                            
+                            if (initialData && initialData.bestCategories) {
+                                return initialData.bestCategories;
+                            }
+                        } catch (e) {
+                            console.error('Parse error:', e);
+                        }
+                    }
+                    return null;
+                }
+            """)
+            
+            if next_data and next_data.get('category1DepthList'):
+                cat1_list = next_data.get('category1DepthList', [])
+                print(f"✅ bestCategories 발견: {len(cat1_list)}개 depth1 카테고리")
+                
+                # 카테고리 파싱
+                pairs = extract_category_pairs({"bestCategories": next_data})
+                print(f"🎯 총 {len(pairs)}개 카테고리 조합 추출")
+            else:
+                print("⚠️ bestCategories를 찾을 수 없습니다")
+                    
+        except Exception as e:
+            print(f"⚠️ 페이지 로드 실패: {e}")
 
         context.close()
         browser.close()
-
-    # api-key 는 없을 수 있다 (현재 제품 API는 공개 호출 허용됨)
-    # 카테고리 목록은 seed 상품 응답에서 유추하거나, 최소 기본값으로 대체한다
-    pairs: List[CategoryPair] = []
-    if seed_products:
-        for prod in seed_products:
-            d1 = str(
-                prod.get("depth1Code")
-                or prod.get("d1Code")
-                or prod.get("categoryDepth1Code")
-                or ""
-            )
-            d2 = str(
-                prod.get("depth2Code")
-                or prod.get("d2Code")
-                or prod.get("categoryDepth2Code")
-                or ""
-            )
-            d1n = str(
-                prod.get("depth1Name")
-                or prod.get("d1Name")
-                or prod.get("categoryDepth1Name")
-                or ""
-            )
-            d2n = str(
-                prod.get("depth2Name")
-                or prod.get("d2Name")
-                or prod.get("categoryDepth2Name")
-                or ""
-            )
-            if d1 and d2:
-                pairs.append(CategoryPair(d1, d1n, d2, d2n))
-    # 대표 카테고리 기본값 (요청 예시 기반)
+    
+    # 실패 시 W컨셉의 주요 카테고리 하드코딩
     if not pairs:
+        print("⚠️ 카테고리 동적 추출 실패, 하드코딩된 카테고리 사용")
         pairs = [
+            # 1. 의류 - 12개
+            CategoryPair("10102", "의류", "10102101", "아우터"),
+            CategoryPair("10102", "의류", "10102201", "원피스"),
+            CategoryPair("10102", "의류", "10102202", "상의"),
             CategoryPair("10102", "의류", "10102203", "하의"),
+            CategoryPair("10102", "의류", "10102204", "셔츠/블라우스"),
+            CategoryPair("10102", "의류", "10102205", "니트/스웨터"),
+            CategoryPair("10102", "의류", "10102206", "세트"),
+            CategoryPair("10102", "의류", "10102207", "스커트"),
+            CategoryPair("10102", "의류", "10102208", "티셔츠"),
+            CategoryPair("10102", "의류", "10102209", "팬츠"),
+            CategoryPair("10102", "의류", "10102210", "점프수트"),
+            CategoryPair("10102", "의류", "10102211", "데님"),
+            # 2. 슈즈 - 6개
+            CategoryPair("10103", "슈즈", "10103101", "스니커즈"),
+            CategoryPair("10103", "슈즈", "10103102", "플랫/로퍼"),
+            CategoryPair("10103", "슈즈", "10103103", "샌들/슬리퍼"),
+            CategoryPair("10103", "슈즈", "10103104", "힐/펌프스"),
+            CategoryPair("10103", "슈즈", "10103105", "부츠/워커"),
+            CategoryPair("10103", "슈즈", "10103106", "슬립온"),
+            # 3. 가방 - 7개
+            CategoryPair("10104", "가방", "10104101", "숄더백"),
+            CategoryPair("10104", "가방", "10104102", "크로스백"),
+            CategoryPair("10104", "가방", "10104103", "토트백"),
+            CategoryPair("10104", "가방", "10104104", "클러치"),
+            CategoryPair("10104", "가방", "10104105", "백팩"),
+            CategoryPair("10104", "가방", "10104106", "에코백"),
+            CategoryPair("10104", "가방", "10104107", "캐리어"),
+            # 4. 액세서리 - 8개
+            CategoryPair("10105", "액세서리", "10105101", "주얼리"),
+            CategoryPair("10105", "액세서리", "10105102", "시계"),
+            CategoryPair("10105", "액세서리", "10105103", "모자"),
+            CategoryPair("10105", "액세서리", "10105104", "벨트"),
+            CategoryPair("10105", "액세서리", "10105105", "양말"),
+            CategoryPair("10105", "액세서리", "10105106", "헤어"),
+            CategoryPair("10105", "액세서리", "10105107", "선글라스"),
+            CategoryPair("10105", "액세서리", "10105108", "스카프"),
+            # 5. 뷰티 - 6개
+            CategoryPair("10106", "뷰티", "10106101", "스킨케어"),
+            CategoryPair("10106", "뷰티", "10106102", "메이크업"),
+            CategoryPair("10106", "뷰티", "10106103", "바디케어"),
+            CategoryPair("10106", "뷰티", "10106104", "헤어케어"),
+            CategoryPair("10106", "뷰티", "10106105", "향수"),
+            CategoryPair("10106", "뷰티", "10106106", "네일"),
+            # 6. 라이프 - 4개
+            CategoryPair("10107", "라이프", "10107101", "리빙"),
+            CategoryPair("10107", "라이프", "10107102", "테크"),
+            CategoryPair("10107", "라이프", "10107103", "식품"),
+            CategoryPair("10107", "라이프", "10107104", "문구"),
+            # 7. 맨즈 - 6개
+            CategoryPair("10108", "맨즈", "10108101", "의류"),
+            CategoryPair("10108", "맨즈", "10108102", "슈즈"),
+            CategoryPair("10108", "맨즈", "10108103", "가방"),
+            CategoryPair("10108", "맨즈", "10108104", "액세서리"),
+            CategoryPair("10108", "맨즈", "10108105", "뷰티"),
+            CategoryPair("10108", "맨즈", "10108106", "스포츠"),
+            # 8. 키즈 - 4개
+            CategoryPair("10109", "키즈", "10109101", "의류"),
+            CategoryPair("10109", "키즈", "10109102", "슈즈"),
+            CategoryPair("10109", "키즈", "10109103", "가방"),
+            CategoryPair("10109", "키즈", "10109104", "액세서리"),
+            # 9. 스포츠 - 5개
+            CategoryPair("10110", "스포츠", "10110101", "의류"),
+            CategoryPair("10110", "스포츠", "10110102", "슈즈"),
+            CategoryPair("10110", "스포츠", "10110103", "가방"),
+            CategoryPair("10110", "스포츠", "10110104", "액세서리"),
+            CategoryPair("10110", "스포츠", "10110105", "용품"),
+            # 10. 언더웨어 - 3개
+            CategoryPair("10111", "언더웨어", "10111101", "여성"),
+            CategoryPair("10111", "언더웨어", "10111102", "남성"),
+            CategoryPair("10111", "언더웨어", "10111103", "홈웨어"),
         ]
+        print(f"📋 하드코딩된 카테고리 {len(pairs)}개 사용 (depth1: 10개)")
 
     # Prepare base headers for subsequent API calls
     base_headers = {
@@ -212,9 +332,8 @@ def get_api_key_and_categories(timeout_ms: int = 25000) -> Tuple[str, List[Categ
         "referer": "https://display.wconcept.co.kr/rn/best",
         "user-agent": captured_headers.get("user-agent", "Mozilla/5.0"),
     }
-    if api_key:
-        base_headers["x-api-key"] = api_key
-    return api_key, pairs, base_headers
+    
+    return None, pairs, base_headers
 
 
 def extract_products_list(obj: Any) -> List[Dict[str, Any]]:
@@ -317,8 +436,8 @@ def fetch_products_for_category_page(
         "genderType": "all",
         "dateType": "daily",
         "ageGroup": "all",
-        "depth1Code": cat.depth1_code,
-        "depth2Code": cat.depth2_code,
+        "depth1Code": cat.depth1_code if cat.depth1_code != "ALL" else "",
+        "depth2Code": cat.depth2_code if cat.depth2_code != "ALL" else "",
         "pageSize": page_size,
         "pageNo": page_no,
     }
@@ -422,7 +541,7 @@ def write_csv(rows: List[List[Any]], output_dir: Path) -> Path:
     now = datetime.now(KST)
     filename = f"wconcept_best_{now.strftime('%Y%m%d_%H%M')}_KST.csv"
     out_path = output_dir / filename
-    headers = ["날짜", "시간", "메인 카테고리", "서브 카테고리", "순위", "상품명", "가격"]
+    headers = ["날짜", "시간", "depth1_카테고리", "depth2_카테고리", "순위", "상품명", "가격"]
     with out_path.open("w", newline="", encoding="utf-8") as f:
         writer = csv.writer(f)
         writer.writerow(headers)
@@ -459,16 +578,32 @@ def main():
     page_size = max(1, int(args.page_size))
     max_pages = max(0, int(args.max_pages))
 
+    # bestCategories에 이미 ALL > 전체, depth1 > ALL이 모두 포함되어 있음
+    # 추가 작업 없이 바로 사용
+    print(f"🔍 총 {len(categories)}개 카테고리 조합 수집 시작...")
+    
+    # 모든 카테고리에서 HACIE 제품 수집
+    hacie_found_per_category = {}
+    
     for cat in categories:
         try:
+            print(f"  📂 {cat.depth1_name or cat.depth1_code} > {cat.depth2_name or cat.depth2_code}")
             products = fetch_all_products_for_category(
                 base_headers, cat, page_size=page_size, max_pages=max_pages
             )
         except Exception as e:
-            print(f"⚠️  카테고리 페이지 수집 중 오류: depth1={cat.depth1_name or cat.depth1_code}, depth2={cat.depth2_name or cat.depth2_code}")
-            print(f"   에러: {e}")
+            print(f"     ❌ 오류: {e}")
             continue
+        
         filtered = filter_products_by_brand(products, ALLOWED_BRANDS)
+        
+        # 카테고리별 HACIE 발견 카운트
+        cat_key = f"{cat.depth1_name or cat.depth1_code} > {cat.depth2_name or cat.depth2_code}"
+        hacie_found_per_category[cat_key] = len(filtered)
+        
+        if filtered:
+            print(f"     ✅ HACIE {len(filtered)}개 발견")
+        
         for idx, p in enumerate(filtered):
             rank = pick_rank(idx, p)
             name = pick_name(p)
@@ -484,6 +619,12 @@ def main():
                     price if price is not None else "",
                 ]
             )
+    
+    # 카테고리별 HACIE 발견 통계 출력
+    print(f"\n📊 카테고리별 HACIE 제품 발견 현황:")
+    for cat_key, count in sorted(hacie_found_per_category.items(), key=lambda x: -x[1]):
+        if count > 0:
+            print(f"  {cat_key}: {count}개")
 
     if not rows:
         # Write empty CSV with headers for traceability
