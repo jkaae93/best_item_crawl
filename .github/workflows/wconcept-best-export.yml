@@ -28,7 +28,7 @@ jobs:
         env:
           TZ: Asia/Seoul
         run: |
-          python scripts/wconcept_best_export.py --output-dir output
+          python -m scripts.wconcept_best_export --output-dir output
 
       - name: Upload CSV artifact
         uses: actions/upload-artifact@v4
