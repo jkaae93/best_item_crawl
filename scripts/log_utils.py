@@ -29,7 +29,7 @@ def setup_logging(app_name: str, level: int = logging.INFO) -> logging.Logger:
     logfile = LOG_ROOT / f"{app_name}_{ts}.log"
 
     formatter = logging.Formatter(
-        fmt="%Y-%m-%d %H:%M:%S %(levelname)s %(name)s - %(message)s",
+        fmt="%(asctime)s %(levelname)s %(name)s - %(message)s",
         datefmt="%Y-%m-%d %H:%M:%S",
     )
 

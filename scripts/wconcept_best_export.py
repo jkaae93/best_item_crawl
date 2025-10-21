@@ -6,6 +6,7 @@ import csv
 import json
 import os
 import re
+import time
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -309,6 +310,7 @@ def fetch_products_for_category_page(
     cat: CategoryPair,
     page_no: int,
     page_size: int,
+    max_retries: int = 3,
 ) -> Tuple[List[Dict[str, Any]], Any]:
     payload = {
         "custNo": "0",
@@ -321,11 +323,30 @@ def fetch_products_for_category_page(
         "pageSize": page_size,
         "pageNo": page_no,
     }
-    resp = requests.post(PRODUCT_ENDPOINT, headers=headers, json=payload, timeout=30)
-    resp.raise_for_status()
-    data = resp.json()
-    products = extract_products_list(data)
-    return products, data
+    
+    last_error = None
+    for attempt in range(max_retries):
+        try:
+            resp = requests.post(PRODUCT_ENDPOINT, headers=headers, json=payload, timeout=30)
+            resp.raise_for_status()
+            data = resp.json()
+            products = extract_products_list(data)
+            return products, data
+        except requests.exceptions.HTTPError as e:
+            last_error = e
+            if e.response.status_code >= 500 and attempt < max_retries - 1:
+                wait_time = (attempt + 1) * 2
+                time.sleep(wait_time)
+                continue
+            raise
+        except Exception as e:
+            last_error = e
+            if attempt < max_retries - 1:
+                time.sleep(2)
+                continue
+            raise
+    
+    raise last_error if last_error else Exception("Unknown error")
 
 
 def _infer_has_next_page(
@@ -446,12 +467,11 @@ def main():
             products = fetch_all_products_for_category(
                 base_headers, cat, page_size=page_size, max_pages=max_pages
             )
-        except Exception:
+        except Exception as e:
             logger.exception(
-                "카테고리 페이지 수집 중 오류", extra={
-                    "depth1": f"{cat.depth1_name or cat.depth1_code}",
-                    "depth2": f"{cat.depth2_name or cat.depth2_code}",
-                }
+                "카테고리 페이지 수집 중 오류: depth1=%s, depth2=%s",
+                cat.depth1_name or cat.depth1_code,
+                cat.depth2_name or cat.depth2_code,
             )
             continue
         filtered = filter_products_by_brand(products, ALLOWED_BRANDS)

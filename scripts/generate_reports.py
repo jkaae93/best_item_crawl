@@ -83,6 +83,7 @@ class HacieReportGenerator:
         # 데이터 수집
         all_products = []
         daily_stats = {}
+        file_links = []
         
         for csv_file in csv_files:
             products = self.parse_csv(csv_file)
@@ -91,6 +92,11 @@ class HacieReportGenerator:
             # 날짜별 통계
             file_date = csv_file.parent.name
             daily_stats[file_date] = len(products)
+            
+            # GitHub 링크 생성
+            relative_path = csv_file.relative_to(self.output_dir)
+            github_link = f"https://github.com/kaae/best_item_crawl/blob/master/output/{relative_path}"
+            file_links.append((file_date, csv_file.name, github_link))
         
         # 통계 계산
         total_products = len(all_products)
@@ -191,6 +197,18 @@ class HacieReportGenerator:
 
 ---
 
+## 📎 참고 데이터 파일
+
+| 날짜 | 파일명 |
+|------|--------|
+"""
+        
+        for date, filename, link in sorted(file_links):
+            report += f"| {date}일 | [{filename}]({link}) |\n"
+        
+        report += f"""
+---
+
 *생성 일시: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} KST*  
 *데이터 출처: W컨셉 베스트 페이지*
 """
@@ -271,6 +289,7 @@ class HacieReportGenerator:
         # 데이터 수집
         all_products = []
         daily_stats = {}
+        file_links = []
         
         for csv_file in csv_files:
             products = self.parse_csv(csv_file)
@@ -278,6 +297,11 @@ class HacieReportGenerator:
             
             file_date = f"{csv_file.parent.parent.parent.name}/{csv_file.parent.parent.name}/{csv_file.parent.name}"
             daily_stats[file_date] = len(products)
+            
+            # GitHub 링크 생성
+            relative_path = csv_file.relative_to(self.output_dir)
+            github_link = f"https://github.com/kaae/best_item_crawl/blob/master/output/{relative_path}"
+            file_links.append((file_date, csv_file.name, github_link))
         
         # 통계 계산
         total_products = len(all_products)
@@ -461,6 +485,18 @@ class HacieReportGenerator:
 - 라이브 커머스 진행
 - 패키지 상품 기획
 
+---
+
+## 📎 참고 데이터 파일
+
+| 날짜 | 파일명 |
+|------|--------|
+"""
+        
+        for date, filename, link in sorted(file_links):
+            report += f"| {date} | [{filename}]({link}) |\n"
+        
+        report += f"""
 ---
 
 *생성 일시: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} KST*  
