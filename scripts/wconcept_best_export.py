@@ -20,7 +20,8 @@ KST = ZoneInfo("Asia/Seoul")
 BEST_PAGE_URL = (
     "https://display.wconcept.co.kr/rn/best?displayCategoryType=ALL&displaySubCategoryType=ALL&gnbType=Y"
 )
-CATEGORY_ENDPOINT_SUBSTR = "/display/api/best/v1/category"
+# 페이지가 최초로 호출하는 상품 API를 관찰하여 카테고리 힌트를 확보한다
+CATEGORY_ENDPOINT_SUBSTR = "/display/api/best/v1/product"
 PRODUCT_ENDPOINT = "https://gw-front.wconcept.co.kr/display/api/best/v1/product"
 
 KEYWORDS = ["하시에", "hacie"]
@@ -126,16 +127,20 @@ def get_api_key_and_categories(timeout_ms: int = 25000) -> Tuple[str, List[Categ
 
         api_key: Optional[str] = None
         captured_headers: Dict[str, str] = {}
-        categories_json: Optional[Dict[str, Any]] = None
+        seed_products: Optional[List[Dict[str, Any]]] = None
 
         def on_response(response):
-            nonlocal api_key, captured_headers, categories_json
+            nonlocal api_key, captured_headers, seed_products
             url = response.url
-            if CATEGORY_ENDPOINT_SUBSTR in url and categories_json is None:
+            if CATEGORY_ENDPOINT_SUBSTR in url and seed_products is None:
+                # 상품 응답을 받아 리스트 구조를 확보한다
                 try:
-                    categories_json = response.json()
+                    data = response.json()
                 except Exception:
-                    return
+                    data = None
+                if isinstance(data, dict):
+                    seed_products = extract_products_list(data)
+                # 요청 헤더에서 x-api-key 등도 함께 확보 (없어도 동작할 수 있음)
                 try:
                     req = response.request
                     headers = req.headers or {}
@@ -162,23 +167,52 @@ def get_api_key_and_categories(timeout_ms: int = 25000) -> Tuple[str, List[Categ
         context.close()
         browser.close()
 
-    if not categories_json:
-        raise RuntimeError("카테고리 응답을 수집하지 못했습니다. 페이지 구조가 변경되었을 수 있습니다.")
-    if not api_key:
-        raise RuntimeError("x-api-key를 추출하지 못했습니다. 보안 정책이 변경되었을 수 있습니다.")
-
-    pairs = extract_category_pairs(categories_json)
+    # api-key 는 없을 수 있다 (현재 제품 API는 공개 호출 허용됨)
+    # 카테고리 목록은 seed 상품 응답에서 유추하거나, 최소 기본값으로 대체한다
+    pairs: List[CategoryPair] = []
+    if seed_products:
+        for prod in seed_products:
+            d1 = str(
+                prod.get("depth1Code")
+                or prod.get("d1Code")
+                or prod.get("categoryDepth1Code")
+                or ""
+            )
+            d2 = str(
+                prod.get("depth2Code")
+                or prod.get("d2Code")
+                or prod.get("categoryDepth2Code")
+                or ""
+            )
+            d1n = str(
+                prod.get("depth1Name")
+                or prod.get("d1Name")
+                or prod.get("categoryDepth1Name")
+                or ""
+            )
+            d2n = str(
+                prod.get("depth2Name")
+                or prod.get("d2Name")
+                or prod.get("categoryDepth2Name")
+                or ""
+            )
+            if d1 and d2:
+                pairs.append(CategoryPair(d1, d1n, d2, d2n))
+    # 대표 카테고리 기본값 (요청 예시 기반)
     if not pairs:
-        raise RuntimeError("카테고리 목록을 파싱하지 못했습니다. bestCategories 데이터 구조를 확인하세요.")
+        pairs = [
+            CategoryPair("10102", "의류", "10102203", "하의"),
+        ]
 
     # Prepare base headers for subsequent API calls
     base_headers = {
-        "x-api-key": api_key,
         "content-type": "application/json",
         "origin": "https://display.wconcept.co.kr",
         "referer": "https://display.wconcept.co.kr/rn/best",
         "user-agent": captured_headers.get("user-agent", "Mozilla/5.0"),
     }
+    if api_key:
+        base_headers["x-api-key"] = api_key
     return api_key, pairs, base_headers
 
 
@@ -189,6 +223,13 @@ def extract_products_list(obj: Any) -> List[Dict[str, Any]]:
         for v in vals:
             if isinstance(v, list) and v and isinstance(v[0], dict):
                 return v
+    # Common Wconcept best API shape: { data: { content: [...] } }
+    if isinstance(obj, dict):
+        data = obj.get("data")
+        if isinstance(data, dict):
+            content = data.get("content")
+            if isinstance(content, list) and content and isinstance(content[0], dict):
+                return content
     # Fallback: return any list of dicts containing 'productName' like fields
     candidates = find_key_recursive(obj, "productName")
     if candidates:
