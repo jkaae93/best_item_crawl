@@ -2,8 +2,9 @@ name: Generate Monthly Report
 
 on:
   schedule:
-    # 매월 1일 오전 8시 (KST = UTC 23시, 전날 23시)
-    - cron: '0 23 L * *'
+    # 매월 28-31일 오후 11시 (UTC)에 실행 후 다음날이 1일인지 체크
+    # 1일이면 전월 리포트 생성 (1일 08:00 KST = 전날 23:00 UTC)
+    - cron: '0 23 28-31 * *'
   workflow_dispatch:  # 수동 실행 가능
     inputs:
       target_year:
@@ -21,17 +22,34 @@ jobs:
     runs-on: ubuntu-latest
     
     steps:
+      - name: Check if tomorrow is 1st day of month
+        id: check_date
+        run: |
+          # KST 기준 내일 날짜 (UTC+9)
+          tomorrow=$(TZ=Asia/Seoul date -d tomorrow '+%d')
+          
+          if [ "$tomorrow" = "01" ]; then
+            echo "is_first_day=true" >> $GITHUB_OUTPUT
+            echo "✓ 내일이 1일입니다. 월간 리포트를 생성합니다."
+          else
+            echo "is_first_day=false" >> $GITHUB_OUTPUT
+            echo "✗ 내일이 1일이 아닙니다. 작업을 건너뜁니다."
+          fi
+      
       - name: Checkout repository
+        if: steps.check_date.outputs.is_first_day == 'true' || github.event_name == 'workflow_dispatch'
         uses: actions/checkout@v4
         with:
           fetch-depth: 0  # 전체 히스토리 가져오기
       
       - name: Set up Python
+        if: steps.check_date.outputs.is_first_day == 'true' || github.event_name == 'workflow_dispatch'
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
       
       - name: Calculate target month
+        if: steps.check_date.outputs.is_first_day == 'true' || github.event_name == 'workflow_dispatch'
         id: calc
         run: |
           if [ -n "${{ github.event.inputs.target_year }}" ] && [ -n "${{ github.event.inputs.target_month }}" ]; then
@@ -57,6 +75,7 @@ jobs:
           echo "대상 기간: ${year}년 ${month}월"
       
       - name: Generate monthly report
+        if: steps.check_date.outputs.is_first_day == 'true' || github.event_name == 'workflow_dispatch'
         id: generate
         run: |
           year="${{ steps.calc.outputs.year }}"
@@ -86,7 +105,7 @@ jobs:
           fi
       
       - name: Display report summary
-        if: steps.generate.outputs.report_exists == 'true'
+        if: (steps.check_date.outputs.is_first_day == 'true' || github.event_name == 'workflow_dispatch') && steps.generate.outputs.report_exists == 'true'
         run: |
           report_file="${{ steps.generate.outputs.report_file }}"
           
@@ -96,7 +115,7 @@ jobs:
           fi
       
       - name: Commit and push monthly report
-        if: steps.generate.outputs.report_exists == 'true'
+        if: (steps.check_date.outputs.is_first_day == 'true' || github.event_name == 'workflow_dispatch') && steps.generate.outputs.report_exists == 'true'
         run: |
           git config --local user.email "github-actions[bot]@users.noreply.github.com"
           git config --local user.name "github-actions[bot]"
@@ -128,7 +147,7 @@ jobs:
           fi
       
       - name: Create summary
-        if: steps.generate.outputs.report_exists == 'true'
+        if: (steps.check_date.outputs.is_first_day == 'true' || github.event_name == 'workflow_dispatch') && steps.generate.outputs.report_exists == 'true'
         run: |
           report_file="${{ steps.generate.outputs.report_file }}"
           year="${{ steps.calc.outputs.year }}"
@@ -156,7 +175,7 @@ jobs:
           fi
       
       - name: Upload report as artifact
-        if: steps.generate.outputs.report_exists == 'true'
+        if: (steps.check_date.outputs.is_first_day == 'true' || github.event_name == 'workflow_dispatch') && steps.generate.outputs.report_exists == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: monthly-report-${{ steps.calc.outputs.year }}-${{ steps.calc.outputs.month }}
