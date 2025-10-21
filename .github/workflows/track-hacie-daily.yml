@@ -13,7 +13,7 @@ jobs:
   track-rankings:
     runs-on: ubuntu-latest
     container:
-      image: mcr.microsoft.com/playwright/python:v1.40.0-jammy
+      image: mcr.microsoft.com/playwright/python:v1.55.0-jammy
     
     steps:
       - name: Checkout repository
@@ -35,7 +35,33 @@ jobs:
         id: track
         run: |
           export PYTHONPATH="${PYTHONPATH}:${GITHUB_WORKSPACE}"
-          python3 scripts/wconcept_best_export.py
+          
+          # 스크립트 실행 (최대 3회 재시도)
+          max_attempts=3
+          attempt=1
+          
+          while [ $attempt -le $max_attempts ]; do
+            echo "🔄 시도 $attempt/$max_attempts..."
+            
+            if python3 scripts/wconcept_best_export.py; then
+              echo "✅ 크롤링 성공!"
+              exit 0
+            else
+              exit_code=$?
+              echo "⚠️ 시도 $attempt 실패 (exit code: $exit_code)"
+              
+              if [ $attempt -lt $max_attempts ]; then
+                wait_time=$((attempt * 30))
+                echo "⏳ ${wait_time}초 대기 후 재시도..."
+                sleep $wait_time
+              fi
+            fi
+            
+            attempt=$((attempt + 1))
+          done
+          
+          echo "❌ 모든 시도 실패"
+          exit 1
         continue-on-error: false
       
       - name: Organize files by date
@@ -122,6 +148,17 @@ jobs:
           day="${{ steps.organize.outputs.day }}"
           csv_file="${{ steps.organize.outputs.csv_file }}"
           
+          # 원격 변경사항 가져오기 (충돌 방지)
+          git fetch origin master
+          git rebase origin/master || {
+            echo "⚠️ rebase 충돌 발생, merge로 전환"
+            git rebase --abort
+            git merge origin/master -m "Merge remote changes" || {
+              echo "❌ merge 실패, 변경사항 확인 필요"
+              exit 1
+            }
+          }
+          
           # 모든 파일 추가
           git add output/${year}/${month}/${day}/
           
@@ -142,9 +179,35 @@ jobs:
             자동 생성 by GitHub Actions"
             
             git commit -m "$commit_msg"
-            git push
             
-            echo "✓ 커밋 완료: ${hacie_count}개 상품"
+            # Push 재시도 로직
+            max_push_attempts=3
+            push_attempt=1
+            
+            while [ $push_attempt -le $max_push_attempts ]; do
+              echo "🔄 Push 시도 $push_attempt/$max_push_attempts..."
+              
+              if git push origin master; then
+                echo "✓ 커밋 완료: ${hacie_count}개 상품"
+                exit 0
+              else
+                echo "⚠️ Push 실패, 원격 변경사항 다시 가져오기..."
+                git fetch origin master
+                git rebase origin/master || {
+                  git rebase --abort
+                  git merge origin/master -m "Merge remote changes during push retry"
+                }
+                
+                push_attempt=$((push_attempt + 1))
+                
+                if [ $push_attempt -le $max_push_attempts ]; then
+                  sleep 5
+                fi
+              fi
+            done
+            
+            echo "❌ Push 최종 실패"
+            exit 1
           fi
       
       - name: Create summary

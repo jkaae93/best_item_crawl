@@ -120,6 +120,10 @@ jobs:
           total="${{ steps.generate.outputs.total_products }}"
           avg="${{ steps.generate.outputs.avg_per_day }}"
           
+          # 원격 변경사항 가져오기
+          git fetch origin master
+          git rebase origin/master || git merge origin/master -m "Merge remote changes"
+          
           git add output/${year}/${month}/*월간통계.md
           git add output/${year}/${month}/*월간통계.csv
           
@@ -136,9 +140,19 @@ jobs:
             - 자동 생성: GitHub Actions (Monthly Report)"
             
             git commit -m "$commit_msg"
-            git push
             
-            echo "✓ 월간 리포트 커밋 완료"
+            # Push 재시도
+            for i in {1..3}; do
+              if git push origin master; then
+                echo "✓ 월간 리포트 커밋 완료"
+                break
+              else
+                echo "⚠️ Push 실패, 재시도 $i/3"
+                git fetch origin master
+                git rebase origin/master || git merge origin/master -m "Merge during retry"
+                sleep 3
+              fi
+            done
           fi
       
       - name: Create summary
