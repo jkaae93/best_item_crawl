@@ -40,6 +40,7 @@ jobs:
           echo "week_num=${week_num}" >> $GITHUB_OUTPUT
           
           # 리포트 생성
+          export PYTHONPATH="${PYTHONPATH}:${GITHUB_WORKSPACE}"
           python3 scripts/generate_reports.py weekly ${year} ${month#0} ${week_num}
           
           # 생성된 파일 확인

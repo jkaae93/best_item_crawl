@@ -83,6 +83,7 @@ jobs:
           month_num="${{ steps.calc.outputs.month_num }}"
           
           # 리포트 생성
+          export PYTHONPATH="${PYTHONPATH}:${GITHUB_WORKSPACE}"
           python3 scripts/generate_reports.py monthly ${year} ${month_num}
           
           # 생성된 파일 확인

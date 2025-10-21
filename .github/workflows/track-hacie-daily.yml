@@ -32,6 +32,7 @@ jobs:
       - name: Run HACIE rankings tracker
         id: track
         run: |
+          export PYTHONPATH="${PYTHONPATH}:${GITHUB_WORKSPACE}"
           python3 scripts/wconcept_best_export.py
         continue-on-error: false
       
