@@ -21,9 +21,9 @@ KST = ZoneInfo("Asia/Seoul")
 BEST_PAGE_URL = (
     "https://display.wconcept.co.kr/rn/best?displayCategoryType=ALL&displaySubCategoryType=ALL&gnbType=Y"
 )
-# 페이지가 최초로 호출하는 상품 API를 관찰하여 카테고리 힌트를 확보한다
 CATEGORY_ENDPOINT_SUBSTR = "/display/api/best/v1/product"
 PRODUCT_ENDPOINT = "https://gw-front.wconcept.co.kr/display/api/best/v1/product"
+CATEGORY_CACHE_FILE = Path(__file__).parent.parent / "data" / "category.json"
 
 ALLOWED_BRANDS = ["하시에", "HACIE"]
 
@@ -179,6 +179,61 @@ def extract_category_pairs(categories_json: Dict[str, Any]) -> List[CategoryPair
     return list(unique.values())
 
 
+def load_cached_categories() -> Optional[List[CategoryPair]]:
+    """data/category.json에서 캐시된 카테고리 로드"""
+    if not CATEGORY_CACHE_FILE.exists():
+        return None
+    
+    try:
+        with CATEGORY_CACHE_FILE.open("r", encoding="utf-8") as f:
+            data = json.load(f)
+        
+        pairs = []
+        for item in data:
+            pairs.append(CategoryPair(
+                depth1_code=item["depth1_code"],
+                depth1_name=item["depth1_name"],
+                depth2_code=item["depth2_code"],
+                depth2_name=item["depth2_name"]
+            ))
+        
+        print(f"📂 캐시된 카테고리 로드: {len(pairs)}개 (from {CATEGORY_CACHE_FILE})")
+        return pairs
+    except Exception as e:
+        print(f"⚠️ 캐시 로드 실패: {e}")
+        return None
+
+
+def save_categories_to_cache(pairs: List[CategoryPair]) -> None:
+    """카테고리를 data/category.json에 저장"""
+    CATEGORY_CACHE_FILE.parent.mkdir(parents=True, exist_ok=True)
+    
+    data = []
+    for p in pairs:
+        data.append({
+            "depth1_code": p.depth1_code,
+            "depth1_name": p.depth1_name,
+            "depth2_code": p.depth2_code,
+            "depth2_name": p.depth2_name
+        })
+    
+    with CATEGORY_CACHE_FILE.open("w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+    
+    print(f"💾 카테고리 저장 완료: {len(pairs)}개 → {CATEGORY_CACHE_FILE}")
+
+
+def categories_are_different(old_pairs: List[CategoryPair], new_pairs: List[CategoryPair]) -> bool:
+    """두 카테고리 목록이 다른지 비교"""
+    if len(old_pairs) != len(new_pairs):
+        return True
+    
+    old_set = {(p.depth1_code, p.depth2_code) for p in old_pairs}
+    new_set = {(p.depth1_code, p.depth2_code) for p in new_pairs}
+    
+    return old_set != new_set
+
+
 def get_api_key_and_categories(timeout_ms: int = 25000) -> Tuple[str, List[CategoryPair], Dict[str, str]]:
     """베스트 페이지에서 __NEXT_DATA__를 통해 카테고리 추출"""
     
@@ -247,90 +302,48 @@ def get_api_key_and_categories(timeout_ms: int = 25000) -> Tuple[str, List[Categ
         context.close()
         browser.close()
     
-    # 실패 시 W컨셉의 주요 카테고리 하드코딩
+    # 새로 추출한 카테고리와 캐시 비교
+    if pairs:
+        cached_pairs = load_cached_categories()
+        
+        if cached_pairs is None:
+            # 캐시 없음 - 새로 저장
+            save_categories_to_cache(pairs)
+            print("✨ 최초 카테고리 캐시 생성")
+        elif categories_are_different(cached_pairs, pairs):
+            # 카테고리 변경됨
+            print(f"🔄 카테고리 변경 감지: {len(cached_pairs)}개 → {len(pairs)}개")
+            save_categories_to_cache(pairs)
+            print("✅ 카테고리 캐시 업데이트 완료")
+        else:
+            print(f"✓ 카테고리 변경 없음 (동일: {len(pairs)}개)")
+    
+    # 동적 추출 실패 시 캐시 사용
     if not pairs:
-        print("⚠️ 카테고리 동적 추출 실패, 하드코딩된 카테고리 사용")
-        pairs = [
-            # 1. 의류 - 12개
-            CategoryPair("10102", "의류", "10102101", "아우터"),
-            CategoryPair("10102", "의류", "10102201", "원피스"),
-            CategoryPair("10102", "의류", "10102202", "상의"),
-            CategoryPair("10102", "의류", "10102203", "하의"),
-            CategoryPair("10102", "의류", "10102204", "셔츠/블라우스"),
-            CategoryPair("10102", "의류", "10102205", "니트/스웨터"),
-            CategoryPair("10102", "의류", "10102206", "세트"),
-            CategoryPair("10102", "의류", "10102207", "스커트"),
-            CategoryPair("10102", "의류", "10102208", "티셔츠"),
-            CategoryPair("10102", "의류", "10102209", "팬츠"),
-            CategoryPair("10102", "의류", "10102210", "점프수트"),
-            CategoryPair("10102", "의류", "10102211", "데님"),
-            # 2. 슈즈 - 6개
-            CategoryPair("10103", "슈즈", "10103101", "스니커즈"),
-            CategoryPair("10103", "슈즈", "10103102", "플랫/로퍼"),
-            CategoryPair("10103", "슈즈", "10103103", "샌들/슬리퍼"),
-            CategoryPair("10103", "슈즈", "10103104", "힐/펌프스"),
-            CategoryPair("10103", "슈즈", "10103105", "부츠/워커"),
-            CategoryPair("10103", "슈즈", "10103106", "슬립온"),
-            # 3. 가방 - 7개
-            CategoryPair("10104", "가방", "10104101", "숄더백"),
-            CategoryPair("10104", "가방", "10104102", "크로스백"),
-            CategoryPair("10104", "가방", "10104103", "토트백"),
-            CategoryPair("10104", "가방", "10104104", "클러치"),
-            CategoryPair("10104", "가방", "10104105", "백팩"),
-            CategoryPair("10104", "가방", "10104106", "에코백"),
-            CategoryPair("10104", "가방", "10104107", "캐리어"),
-            # 4. 액세서리 - 8개
-            CategoryPair("10105", "액세서리", "10105101", "주얼리"),
-            CategoryPair("10105", "액세서리", "10105102", "시계"),
-            CategoryPair("10105", "액세서리", "10105103", "모자"),
-            CategoryPair("10105", "액세서리", "10105104", "벨트"),
-            CategoryPair("10105", "액세서리", "10105105", "양말"),
-            CategoryPair("10105", "액세서리", "10105106", "헤어"),
-            CategoryPair("10105", "액세서리", "10105107", "선글라스"),
-            CategoryPair("10105", "액세서리", "10105108", "스카프"),
-            # 5. 뷰티 - 6개
-            CategoryPair("10106", "뷰티", "10106101", "스킨케어"),
-            CategoryPair("10106", "뷰티", "10106102", "메이크업"),
-            CategoryPair("10106", "뷰티", "10106103", "바디케어"),
-            CategoryPair("10106", "뷰티", "10106104", "헤어케어"),
-            CategoryPair("10106", "뷰티", "10106105", "향수"),
-            CategoryPair("10106", "뷰티", "10106106", "네일"),
-            # 6. 라이프 - 4개
-            CategoryPair("10107", "라이프", "10107101", "리빙"),
-            CategoryPair("10107", "라이프", "10107102", "테크"),
-            CategoryPair("10107", "라이프", "10107103", "식품"),
-            CategoryPair("10107", "라이프", "10107104", "문구"),
-            # 7. 맨즈 - 6개
-            CategoryPair("10108", "맨즈", "10108101", "의류"),
-            CategoryPair("10108", "맨즈", "10108102", "슈즈"),
-            CategoryPair("10108", "맨즈", "10108103", "가방"),
-            CategoryPair("10108", "맨즈", "10108104", "액세서리"),
-            CategoryPair("10108", "맨즈", "10108105", "뷰티"),
-            CategoryPair("10108", "맨즈", "10108106", "스포츠"),
-            # 8. 키즈 - 4개
-            CategoryPair("10109", "키즈", "10109101", "의류"),
-            CategoryPair("10109", "키즈", "10109102", "슈즈"),
-            CategoryPair("10109", "키즈", "10109103", "가방"),
-            CategoryPair("10109", "키즈", "10109104", "액세서리"),
-            # 9. 스포츠 - 5개
-            CategoryPair("10110", "스포츠", "10110101", "의류"),
-            CategoryPair("10110", "스포츠", "10110102", "슈즈"),
-            CategoryPair("10110", "스포츠", "10110103", "가방"),
-            CategoryPair("10110", "스포츠", "10110104", "액세서리"),
-            CategoryPair("10110", "스포츠", "10110105", "용품"),
-            # 10. 언더웨어 - 3개
-            CategoryPair("10111", "언더웨어", "10111101", "여성"),
-            CategoryPair("10111", "언더웨어", "10111102", "남성"),
-            CategoryPair("10111", "언더웨어", "10111103", "홈웨어"),
-        ]
-        print(f"📋 하드코딩된 카테고리 {len(pairs)}개 사용 (depth1: 10개)")
+        print("⚠️ 카테고리 동적 추출 실패, 캐시 로드 시도...")
+        cached_pairs = load_cached_categories()
+        if cached_pairs:
+            pairs = cached_pairs
+        else:
+            print("❌ 캐시도 없음! 스크립트를 종료합니다.")
+            raise Exception("카테고리를 가져올 수 없습니다. 네트워크를 확인하거나 수동으로 data/category.json을 생성하세요.")
 
     # Prepare base headers for subsequent API calls
     base_headers = {
-        "content-type": "application/json",
+        "accept": "*/*",
+        "accept-language": "ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7",
+        "content-type": "application/json; charset=utf-8",
+        "display-api-key": "VWmkUPgs6g2fviPZ5JQFQ3pERP4tIXv/J2jppLqSRBk=",
+        "devicetype": "PC",
+        "membergrade": "8",
+        "birthdate": "",
+        "profileseqno": "",
         "origin": "https://display.wconcept.co.kr",
-        "referer": "https://display.wconcept.co.kr/rn/best",
-        "user-agent": captured_headers.get("user-agent", "Mozilla/5.0"),
+        "referer": "https://display.wconcept.co.kr/",
+        "sec-fetch-dest": "empty",
+        "sec-fetch-mode": "cors",
+        "sec-fetch-site": "same-site",
+        "user-agent": captured_headers.get("user-agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36"),
     }
     
     return None, pairs, base_headers
@@ -370,8 +383,8 @@ def extract_products_list(obj: Any) -> List[Dict[str, Any]]:
 
 
 def pick_price(product: Dict[str, Any]) -> Optional[int]:
-    # Try common price fields
-    for key in ("salePrice", "finalPrice", "price", "discountPrice", "sale_price"):
+    # finalPrice 우선 (최종가)
+    for key in ("finalPrice", "salePrice", "price", "discountPrice", "sale_price", "customerPrice"):
         if key in product and isinstance(product[key], (int, float, str)):
             try:
                 return int(float(str(product[key]).replace(",", "")))
@@ -381,14 +394,19 @@ def pick_price(product: Dict[str, Any]) -> Optional[int]:
 
 
 def pick_name(product: Dict[str, Any]) -> str:
-    for key in ("productName", "name", "goodsName", "title"):
+    for key in ("itemName", "productName", "name", "goodsName", "title"):
         if key in product and product[key]:
             return str(product[key])
     return ""
 
 
 def pick_brand(product: Dict[str, Any]) -> str:
-    for key in ("brandName", "brand", "brand_name"):
+    # 한글 브랜드명 우선
+    for key in ("brandNameKr", "brandNameKor", "brandKr"):
+        if key in product and product[key]:
+            return str(product[key])
+    # 영문 브랜드명
+    for key in ("brandNameEn", "brandNameEng", "brandEn", "brandName", "brand", "brand_name"):
         if key in product and product[key]:
             return str(product[key])
     return ""
@@ -559,15 +577,52 @@ def main():
         default=0,
         help="최대 페이지 수 (0=제한 없음, 자동 종료)",
     )
+    parser.add_argument(
+        "--skip-category-update",
+        action="store_true",
+        help="카테고리 업데이트 건너뛰고 캐시만 사용 (빠름)",
+    )
+    parser.add_argument(
+        "--test-mode",
+        action="store_true",
+        help="테스트 모드: 처음 3개 카테고리만 수집",
+    )
     args = parser.parse_args()
 
     output_dir = Path(args.output_dir)
 
-    try:
-        api_key, categories, base_headers = get_api_key_and_categories()
-    except Exception as e:
-        print(f"❌ 카테고리 및 API 키 수집 중 오류 발생: {e}")
-        raise
+    # 카테고리 로드
+    if args.skip_category_update:
+        # 캐시만 사용 (Playwright 건너뛰기)
+        print("⚡ 빠른 모드: 캐시된 카테고리만 사용")
+        categories = load_cached_categories()
+        if not categories:
+            print("❌ 캐시 없음! --skip-category-update 없이 실행하세요.")
+            raise Exception("data/category.json이 없습니다.")
+        
+        base_headers = {
+            "accept": "*/*",
+            "accept-language": "ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7",
+            "content-type": "application/json; charset=utf-8",
+            "display-api-key": "VWmkUPgs6g2fviPZ5JQFQ3pERP4tIXv/J2jppLqSRBk=",
+            "devicetype": "PC",
+            "membergrade": "8",
+            "birthdate": "",
+            "profileseqno": "",
+            "origin": "https://display.wconcept.co.kr",
+            "referer": "https://display.wconcept.co.kr/",
+            "sec-fetch-dest": "empty",
+            "sec-fetch-mode": "cors",
+            "sec-fetch-site": "same-site",
+            "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36",
+        }
+    else:
+        # 정상 모드: Playwright로 카테고리 업데이트 시도
+        try:
+            api_key, categories, base_headers = get_api_key_and_categories()
+        except Exception as e:
+            print(f"❌ 카테고리 수집 중 오류: {e}")
+            raise
 
     kst_now = datetime.now(KST)
     date_str = kst_now.strftime("%Y-%m-%d")
@@ -578,19 +633,32 @@ def main():
     page_size = max(1, int(args.page_size))
     max_pages = max(0, int(args.max_pages))
 
-    # bestCategories에 이미 ALL > 전체, depth1 > ALL이 모두 포함되어 있음
-    # 추가 작업 없이 바로 사용
-    print(f"🔍 총 {len(categories)}개 카테고리 조합 수집 시작...")
+    # 테스트 모드인 경우 카테고리 제한
+    test_categories = categories[:3] if args.test_mode else categories
+    
+    if args.test_mode:
+        print(f"🧪 테스트 모드: {len(test_categories)}개 카테고리만 수집")
+    else:
+        print(f"🔍 총 {len(test_categories)}개 카테고리 조합 수집 시작...")
     
     # 모든 카테고리에서 HACIE 제품 수집
     hacie_found_per_category = {}
     
-    for cat in categories:
+    for cat in test_categories:
         try:
             print(f"  📂 {cat.depth1_name or cat.depth1_code} > {cat.depth2_name or cat.depth2_code}")
             products = fetch_all_products_for_category(
                 base_headers, cat, page_size=page_size, max_pages=max_pages
             )
+            print(f"     📦 총 {len(products)}개 상품 수집됨")
+            
+            # 디버깅: 첫 3개 상품의 브랜드 출력
+            if products and args.test_mode:
+                for idx, p in enumerate(products[:3]):
+                    brand = pick_brand(p)
+                    name = pick_name(p)
+                    print(f"       #{idx+1}: {brand} - {name[:30]}")
+                    
         except Exception as e:
             print(f"     ❌ 오류: {e}")
             continue
@@ -603,6 +671,10 @@ def main():
         
         if filtered:
             print(f"     ✅ HACIE {len(filtered)}개 발견")
+            for idx, p in enumerate(filtered[:3]):
+                name = pick_name(p)
+                rank = pick_rank(idx, p)
+                print(f"       - {rank}위: {name[:40]}")
         
         for idx, p in enumerate(filtered):
             rank = pick_rank(idx, p)
