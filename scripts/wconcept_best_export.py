@@ -593,31 +593,38 @@ def main():
 
     # 카테고리 로드
     if args.skip_category_update:
-        # 캐시만 사용 (Playwright 건너뛰기)
-        print("⚡ 빠른 모드: 캐시된 카테고리만 사용")
+        # 빠른 모드: 캐시 우선 사용
+        print("⚡ 빠른 모드: 캐시된 카테고리 우선 사용")
         categories = load_cached_categories()
-        if not categories:
-            print("❌ 캐시 없음! --skip-category-update 없이 실행하세요.")
-            raise Exception("data/category.json이 없습니다.")
         
-        base_headers = {
-            "accept": "*/*",
-            "accept-language": "ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7",
-            "content-type": "application/json; charset=utf-8",
-            "display-api-key": "VWmkUPgs6g2fviPZ5JQFQ3pERP4tIXv/J2jppLqSRBk=",
-            "devicetype": "PC",
-            "membergrade": "8",
-            "birthdate": "",
-            "profileseqno": "",
-            "origin": "https://display.wconcept.co.kr",
-            "referer": "https://display.wconcept.co.kr/",
-            "sec-fetch-dest": "empty",
-            "sec-fetch-mode": "cors",
-            "sec-fetch-site": "same-site",
-            "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36",
-        }
+        if not categories:
+            # 캐시 없음 - Playwright로 추출
+            print("📂 캐시 없음, Playwright로 카테고리 추출 시도...")
+            try:
+                api_key, categories, base_headers = get_api_key_and_categories()
+            except Exception as e:
+                print(f"❌ 카테고리 수집 실패: {e}")
+                raise
+        else:
+            # 캐시 사용 - 헤더만 설정
+            base_headers = {
+                "accept": "*/*",
+                "accept-language": "ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7",
+                "content-type": "application/json; charset=utf-8",
+                "display-api-key": "VWmkUPgs6g2fviPZ5JQFQ3pERP4tIXv/J2jppLqSRBk=",
+                "devicetype": "PC",
+                "membergrade": "8",
+                "birthdate": "",
+                "profileseqno": "",
+                "origin": "https://display.wconcept.co.kr",
+                "referer": "https://display.wconcept.co.kr/",
+                "sec-fetch-dest": "empty",
+                "sec-fetch-mode": "cors",
+                "sec-fetch-site": "same-site",
+                "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36",
+            }
     else:
-        # 정상 모드: Playwright로 카테고리 업데이트 시도
+        # 정상 모드: Playwright로 카테고리 업데이트
         try:
             api_key, categories, base_headers = get_api_key_and_categories()
         except Exception as e:

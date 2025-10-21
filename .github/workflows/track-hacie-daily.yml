@@ -46,15 +46,17 @@ jobs:
           
           # 출력 디렉토리 생성
           mkdir -p output
+          mkdir -p data
           
           # 스크립트 실행 (최대 3회 재시도)
+          # --skip-category-update 사용하여 빠르게 실행
           max_attempts=3
           attempt=1
           
           while [ $attempt -le $max_attempts ]; do
             echo "🔄 시도 $attempt/$max_attempts..."
             
-            if python3 scripts/wconcept_best_export.py; then
+            if python3 scripts/wconcept_best_export.py --skip-category-update; then
               echo "✅ 크롤링 성공!"
               exit 0
             else
