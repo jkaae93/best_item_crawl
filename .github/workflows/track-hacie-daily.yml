@@ -1,19 +1,19 @@
 name: Track HACIE Daily Rankings
-
 on:
   schedule:
     # 매일 오전 8시 (KST = UTC+9, 즉 UTC 23시)
     - cron: '0 23 * * *'
   workflow_dispatch:  # 수동 실행 가능
-
 permissions:
   contents: write
-
 jobs:
   track-rankings:
     runs-on: ubuntu-latest
     container:
       image: mcr.microsoft.com/playwright/python:v1.55.0-jammy
+    
+    env:
+      TZ: Asia/Seoul  # 전역 환경변수로 설정
     
     steps:
       - name: Checkout repository
@@ -36,10 +36,20 @@ jobs:
           pip install --no-cache-dir -r requirements.txt
           python3 -c "import playwright; import requests; print('✅ 패키지 설치 확인 완료')"
       
+      - name: Set KST timezone
+        run: |
+          # 시스템 timezone 설정
+          ln -sf /usr/share/zoneinfo/Asia/Seoul /etc/localtime
+          echo "Asia/Seoul" > /etc/timezone
+          
+          # 확인
+          echo "현재 시스템 시간: $(date '+%Y-%m-%d %H:%M:%S %Z')"
+          echo "Python에서 인식하는 시간:"
+          python3 -c "from datetime import datetime; print(datetime.now().strftime('%Y-%m-%d %H:%M:%S'))"
+      
       - name: Run HACIE rankings tracker
         id: track
         env:
-          TZ: Asia/Seoul
           PYTHONUNBUFFERED: "1"
         run: |
           export PYTHONPATH="${PYTHONPATH}:${GITHUB_WORKSPACE}"
@@ -47,6 +57,9 @@ jobs:
           # 출력 디렉토리 생성
           mkdir -p output
           mkdir -p data
+          
+          # 스크립트 실행 전 날짜 확인
+          echo "🕐 실행 시각 (KST): $(date '+%Y-%m-%d %H:%M:%S')"
           
           # 스크립트 실행 (최대 3회 재시도)
           # --skip-category-update 사용하여 빠르게 실행
@@ -79,29 +92,42 @@ jobs:
       
       - name: Organize files by date
         id: organize
-        env:
-          TZ: Asia/Seoul
         run: |
-          # KST 기준 날짜
+          # KST 기준 날짜 및 시간
           year=$(date '+%Y')
           month=$(date '+%m')
           day=$(date '+%d')
+          timestamp=$(date '+%H%M%S')
+          
+          echo "📅 정리 날짜 (KST): ${year}년 ${month}월 ${day}일 ${timestamp:0:2}:${timestamp:2:2}:${timestamp:4:2}"
           
           # yyyy/MM/dd 폴더 생성
           mkdir -p "output/${year}/${month}/${day}"
           
-          # 최신 CSV 파일 이동
+          # 최신 CSV 파일 찾기
           if ls output/wconcept_best_*.csv 1> /dev/null 2>&1; then
             latest_csv=$(ls -t output/wconcept_best_*.csv | head -1)
-            mv "$latest_csv" "output/${year}/${month}/${day}/"
+            echo "📂 발견된 CSV 파일: $latest_csv"
+            
+            # 기존 파일명에서 확장자 분리
+            base_name=$(basename "$latest_csv" .csv)
+            
+            # 새 파일명: 기존이름_HHMMSS.csv
+            new_csv_name="${base_name}_${timestamp}.csv"
+            new_csv_path="output/${year}/${month}/${day}/${new_csv_name}"
+            
+            # 파일 이동 및 이름 변경
+            mv "$latest_csv" "$new_csv_path"
             
             echo "year=${year}" >> $GITHUB_OUTPUT
             echo "month=${month}" >> $GITHUB_OUTPUT
             echo "day=${day}" >> $GITHUB_OUTPUT
+            echo "timestamp=${timestamp}" >> $GITHUB_OUTPUT
             echo "file_exists=true" >> $GITHUB_OUTPUT
-            echo "csv_file=output/${year}/${month}/${day}/$(basename $latest_csv)" >> $GITHUB_OUTPUT
+            echo "csv_file=${new_csv_path}" >> $GITHUB_OUTPUT
+            echo "csv_name=${new_csv_name}" >> $GITHUB_OUTPUT
             
-            echo "✓ CSV 파일 이동: output/${year}/${month}/${day}/$(basename $latest_csv)"
+            echo "✓ CSV 파일 이동: ${new_csv_path}"
           else
             echo "file_exists=false" >> $GITHUB_OUTPUT
             echo "⚠️ CSV 파일이 생성되지 않았습니다."
@@ -109,13 +135,13 @@ jobs:
       
       - name: Generate daily summary
         if: steps.organize.outputs.file_exists == 'true'
-        env:
-          TZ: Asia/Seoul
         run: |
           csv_file="${{ steps.organize.outputs.csv_file }}"
           year="${{ steps.organize.outputs.year }}"
           month="${{ steps.organize.outputs.month }}"
           day="${{ steps.organize.outputs.day }}"
+          timestamp="${{ steps.organize.outputs.timestamp }}"
+          csv_name="${{ steps.organize.outputs.csv_name }}"
           
           # CSV 파일 존재 확인
           if [ ! -f "$csv_file" ]; then
@@ -123,54 +149,201 @@ jobs:
             exit 1
           fi
           
-          # 일일 요약 생성
-          summary_file="output/${year}/${month}/${day}/일일_요약.md"
+          echo "📄 분석할 CSV 파일: $csv_file"
+          echo "📊 CSV 파일 크기: $(wc -l < "$csv_file") 줄"
+          
+          # CSV 첫 5줄 샘플 출력 (디버깅용)
+          echo "📋 CSV 샘플 (첫 5줄):"
+          head -5 "$csv_file"
+          echo ""
+          
+          # HACIE 상품 라인 샘플 출력
+          echo "🔍 HACIE 상품 샘플 (첫 3개):"
+          grep -iE "HACIE|하시에" "$csv_file" 2>/dev/null | head -3 || echo "HACIE 상품 없음"
+          echo ""
           
           # HACIE 상품 개수 계산
           hacie_count=$(grep -iE "HACIE|하시에" "$csv_file" 2>/dev/null | wc -l | xargs)
+          echo "📊 발견된 HACIE 상품: ${hacie_count}개"
+          
+          # 마크다운 파일명: 일일_요약_HHMMSS.md
+          summary_file="output/${year}/${month}/${day}/일일_요약_${timestamp}.md"
           
           # 요약 파일 생성
-          cat > "$summary_file" << EOF
-          # 📊 ${year}년 ${month}월 ${day}일 일일 요약
+          cat > "$summary_file" << 'EOF_HEADER'
+# 📊 일일 요약
+
+**분석 시각:** KST_PLACEHOLDER  
+**데이터 파일:** `CSV_NAME_PLACEHOLDER`  
+**발견된 HACIE 상품:** HACIE_COUNT_PLACEHOLDER개
+
+---
+
+## 📋 상위 10개 상품
+
+EOF_HEADER
           
-          **분석 시각:** $(date '+%Y-%m-%d %H:%M KST')
+          # 플레이스홀더 치환
+          sed -i "s/KST_PLACEHOLDER/$(date '+%Y-%m-%d %H:%M:%S') KST/" "$summary_file"
+          sed -i "s/CSV_NAME_PLACEHOLDER/${csv_name}/" "$summary_file"
+          sed -i "s/HACIE_COUNT_PLACEHOLDER/${hacie_count}/" "$summary_file"
           
-          ## 주요 지표
-          
-          - **발견된 HACIE 상품:** ${hacie_count}개
-          - **데이터 파일:** \`$(basename $csv_file)\`
-          
-          ## 📋 상위 5개 상품
-          
-          | 순위 | 카테고리 | 상품명 | 가격 |
-          |:----:|---------|--------|-----:|
-          EOF
-          
-          # TOP 5 상품 추출 (CSV: 날짜,시간,메인카테고리,서브카테고리,순위,상품명,가격)
-          if grep -iE "HACIE|하시에" "$csv_file" 2>/dev/null | head -5 | while IFS=',' read -r date time depth1 depth2 rank name price rest; do
-            # CSV에서 따옴표 제거
-            name_clean=$(echo "$name" | sed 's/"//g')
-            price_clean=$(echo "$price" | sed 's/"//g')
-            echo "| ${rank} | ${depth2} | ${name_clean:0:40} | ${price_clean} |" >> "$summary_file"
-          done; then
-            :
+          if [ $hacie_count -gt 0 ]; then
+            # 테이블 헤더 추가
+            cat >> "$summary_file" << 'EOF_TABLE'
+| 순위 | 카테고리 | 상품명 | 가격 |
+|:----:|---------|--------|-----:|
+EOF_TABLE
+            
+            # Python으로 CSV 파싱 (더 정확함)
+            python3 << 'EOF_PYTHON' >> "$summary_file"
+import csv
+import sys
+
+csv_file = sys.argv[1] if len(sys.argv) > 1 else ""
+
+try:
+    with open(csv_file, 'r', encoding='utf-8') as f:
+        reader = csv.reader(f)
+        header = next(reader)  # 헤더 스킵
+        
+        count = 0
+        for row in reader:
+            if len(row) < 7:
+                continue
+            
+            # 상품명에서 HACIE 검색 (대소문자 무시)
+            product_name = row[5] if len(row) > 5 else ""
+            if 'hacie' not in product_name.lower() and '하시에' not in product_name:
+                continue
+            
+            # 데이터 추출
+            rank = row[4] if len(row) > 4 else "-"
+            category = row[3] if len(row) > 3 else "-"
+            price = row[6] if len(row) > 6 else "-"
+            
+            # 상품명 길이 제한
+            if len(product_name) > 50:
+                product_name = product_name[:50] + "..."
+            
+            print(f"| {rank} | {category} | {product_name} | {price} |")
+            
+            count += 1
+            if count >= 10:
+                break
+
+except Exception as e:
+    print(f"| - | - | CSV 파싱 오류: {str(e)} | - |", file=sys.stderr)
+EOF_PYTHON
+python3 -c "
+import csv
+csv_file = '${csv_file}'
+try:
+    with open(csv_file, 'r', encoding='utf-8') as f:
+        reader = csv.reader(f)
+        header = next(reader)
+        count = 0
+        for row in reader:
+            if len(row) < 7:
+                continue
+            product_name = row[5] if len(row) > 5 else ''
+            if 'hacie' not in product_name.lower() and '하시에' not in product_name:
+                continue
+            rank = row[4] if len(row) > 4 else '-'
+            category = row[3] if len(row) > 3 else '-'
+            price = row[6] if len(row) > 6 else '-'
+            if len(product_name) > 50:
+                product_name = product_name[:50] + '...'
+            print(f'| {rank} | {category} | {product_name} | {price} |')
+            count += 1
+            if count >= 10:
+                break
+except Exception as e:
+    print(f'CSV 파싱 오류: {e}')
+" >> "$summary_file"
+            
+            # 전체 상품 목록 섹션
+            cat >> "$summary_file" << 'EOF_DETAILS'
+
+---
+
+## 📦 전체 HACIE 상품 목록
+
+<details>
+<summary>펼쳐서 보기 (전체 ITEM_COUNT_PLACEHOLDER개)</summary>
+
+| 순위 | 카테고리 | 상품명 | 가격 |
+|:----:|---------|--------|-----:|
+EOF_DETAILS
+            
+            sed -i "s/ITEM_COUNT_PLACEHOLDER/${hacie_count}/" "$summary_file"
+            
+            # 전체 목록 추가
+            python3 -c "
+import csv
+csv_file = '${csv_file}'
+try:
+    with open(csv_file, 'r', encoding='utf-8') as f:
+        reader = csv.reader(f)
+        header = next(reader)
+        for row in reader:
+            if len(row) < 7:
+                continue
+            product_name = row[5] if len(row) > 5 else ''
+            if 'hacie' not in product_name.lower() and '하시에' not in product_name:
+                continue
+            rank = row[4] if len(row) > 4 else '-'
+            category = row[3] if len(row) > 3 else '-'
+            price = row[6] if len(row) > 6 else '-'
+            if len(product_name) > 60:
+                product_name = product_name[:60] + '...'
+            print(f'| {rank} | {category} | {product_name} | {price} |')
+except Exception as e:
+    print(f'CSV 파싱 오류: {e}')
+" >> "$summary_file"
+            
+            cat >> "$summary_file" << 'EOF_CLOSE'
+
+</details>
+EOF_CLOSE
           else
-            echo "| - | - | 데이터 없음 | - |" >> "$summary_file"
+            cat >> "$summary_file" << 'EOF_NODATA'
+
+**HACIE 상품이 발견되지 않았습니다.**
+
+EOF_NODATA
           fi
           
-          cat >> "$summary_file" << EOF
+          # 푸터 추가
+          cat >> "$summary_file" << 'EOF_FOOTER'
+
+---
+
+**📈 분석 정보**
+- 총 데이터 행 수: LINE_COUNT_PLACEHOLDER 줄
+- CSV 파일명: `CSV_NAME_FOOTER_PLACEHOLDER`
+- 생성 시각: TIME_PLACEHOLDER KST
+
+*자동 생성 by GitHub Actions*
+EOF_FOOTER
           
-          ---
+          # 플레이스홀더 치환
+          line_count=$(wc -l < "$csv_file")
+          sed -i "s/LINE_COUNT_PLACEHOLDER/${line_count}/" "$summary_file"
+          sed -i "s/CSV_NAME_FOOTER_PLACEHOLDER/${csv_name}/" "$summary_file"
+          sed -i "s|TIME_PLACEHOLDER|$(date '+%Y-%m-%d %H:%M:%S')|" "$summary_file"
           
-          *자동 생성 by GitHub Actions*
-          EOF
+          echo "✅ 일일 요약 생성 완료: $summary_file"
           
-          echo "✓ 일일 요약 생성: $summary_file"
+          # 생성된 마크다운 파일 미리보기
+          echo ""
+          echo "📄 마크다운 내용 미리보기:"
+          head -30 "$summary_file"
+          echo ""
+          echo "... (중략) ..."
       
       - name: Commit and push results
         if: steps.organize.outputs.file_exists == 'true'
-        env:
-          TZ: Asia/Seoul
         run: |
           # Git 안전 디렉토리 설정 (container 환경)
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
@@ -181,6 +354,7 @@ jobs:
           year="${{ steps.organize.outputs.year }}"
           month="${{ steps.organize.outputs.month }}"
           day="${{ steps.organize.outputs.day }}"
+          timestamp="${{ steps.organize.outputs.timestamp }}"
           csv_file="${{ steps.organize.outputs.csv_file }}"
           
           # 원격 변경사항 가져오기 (충돌 방지)
@@ -203,15 +377,15 @@ jobs:
             # HACIE 상품 수 계산
             hacie_count=$(grep -iE "HACIE|하시에" "$csv_file" 2>/dev/null | wc -l | xargs)
             
-            kst_date=$(date '+%Y년 %m월 %d일 %H시')
+            kst_time=$(date '+%Y년 %m월 %d일 %H:%M:%S')
             
-            commit_msg="📊 HACIE 일일 순위 추적 (${year}.${month}.${day})
+            commit_msg="📊 HACIE 일일 순위 추적 (${year}.${month}.${day} ${timestamp:0:2}:${timestamp:2:2}:${timestamp:4:2})
 
-            - 발견 상품: ${hacie_count}개
-            - 분석 시각: ${kst_date}
-            - 파일: output/${year}/${month}/${day}/
+- 발견 상품: ${hacie_count}개
+- 분석 시각: ${kst_time}
+- 파일: output/${year}/${month}/${day}/
 
-            자동 생성 by GitHub Actions"
+자동 생성 by GitHub Actions"
             
             git commit -m "$commit_msg"
             
@@ -223,7 +397,7 @@ jobs:
               echo "🔄 Push 시도 $push_attempt/$max_push_attempts..."
               
               if git push origin master; then
-                echo "✓ 커밋 완료: ${hacie_count}개 상품"
+                echo "✅ 커밋 완료: ${hacie_count}개 상품"
                 exit 0
               else
                 echo "⚠️ Push 실패, 원격 변경사항 다시 가져오기..."
@@ -247,37 +421,207 @@ jobs:
       
       - name: Create summary
         if: steps.organize.outputs.file_exists == 'true'
-        env:
-          TZ: Asia/Seoul
         run: |
           csv_file="${{ steps.organize.outputs.csv_file }}"
           year="${{ steps.organize.outputs.year }}"
           month="${{ steps.organize.outputs.month }}"
           day="${{ steps.organize.outputs.day }}"
+          timestamp="${{ steps.organize.outputs.timestamp }}"
           
           hacie_count=$(grep -iE "HACIE|하시에" "$csv_file" 2>/dev/null | wc -l | xargs)
           
           echo "# 🏆 HACIE 일일 순위 추적 결과" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "**날짜:** ${year}년 ${month}월 ${day}일" >> $GITHUB_STEP_SUMMARY
-          echo "**분석 시각:** $(date '+%Y-%m-%d %H:%M:%S') KST" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**시각:** ${timestamp:0:2}:${timestamp:2:2}:${timestamp:4:2} KST" >> $GITHUB_STEP_SUMMARY
           echo "**발견된 HACIE 상품:** ${hacie_count}개" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           
           if [ $hacie_count -gt 0 ]; then
             echo "## 📋 상위 10개 상품" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
-            echo '```csv' >> $GITHUB_STEP_SUMMARY
-            head -1 "$csv_file" >> $GITHUB_STEP_SUMMARY
-            grep -iE "HACIE|하시에" "$csv_file" 2>/dev/null | head -10 >> $GITHUB_STEP_SUMMARY
-            echo '```' >> $GITHUB_STEP_SUMMARY
+            echo '| 순위 | 카테고리 | 상품명 | 가격 |' >> $GITHUB_STEP_SUMMARY
+            echo '|:----:|---------|--------|-----:|' >> $GITHUB_STEP_SUMMARY
+            
+            grep -iE "HACIE|하시에" "$csv_file" 2>/dev/null | head -10 | while IFS=',' read -r date time depth1 depth2 rank name price rest; do
+              name_clean=$(echo "$name" | sed 's/"//g' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+              price_clean=$(echo "$price" | sed 's/"//g' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+              rank_clean=$(echo "$rank" | sed 's/"//g' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+              depth2_clean=$(echo "$depth2" | sed 's/"//g' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+              
+              if [ ${#name_clean} -gt 40 ]; then
+                name_clean="${name_clean:0:40}..."
+              fi
+              
+              echo "| ${rank_clean} | ${depth2_clean} | ${name_clean} | ${price_clean} |" >> $GITHUB_STEP_SUMMARY
+            done
           fi
       
       - name: Upload results as artifact
         if: steps.organize.outputs.file_exists == 'true'
         uses: actions/upload-artifact@v4
         with:
-          name: daily-rankings-${{ steps.organize.outputs.year }}-${{ steps.organize.outputs.month }}-${{ steps.organize.outputs.day }}
+          name: daily-rankings-${{ steps.organize.outputs.year }}${{ steps.organize.outputs.month }}${{ steps.organize.outputs.day }}-${{ steps.organize.outputs.timestamp }}
           path: output/${{ steps.organize.outputs.year }}/${{ steps.organize.outputs.month }}/${{ steps.organize.outputs.day }}/
           retention-days: 90
+      
+      - name: Send Slack notification
+        if: steps.organize.outputs.file_exists == 'true'
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+        run: |
+          csv_file="${{ steps.organize.outputs.csv_file }}"
+          year="${{ steps.organize.outputs.year }}"
+          month="${{ steps.organize.outputs.month }}"
+          day="${{ steps.organize.outputs.day }}"
+          timestamp="${{ steps.organize.outputs.timestamp }}"
+          csv_name="${{ steps.organize.outputs.csv_name }}"
+          
+          # HACIE 상품 수 계산
+          hacie_count=$(grep -iE "HACIE|하시에" "$csv_file" 2>/dev/null | wc -l | xargs)
+          
+          # 현재 시각
+          kst_time=$(date '+%Y년 %m월 %d일 %H:%M:%S')
+          
+          # 상위 5개 상품 추출 (Slack 메시지용)
+          top5_text=""
+          if [ $hacie_count -gt 0 ]; then
+            top5_text=$(python3 -c "
+import csv
+csv_file = '${csv_file}'
+items = []
+try:
+    with open(csv_file, 'r', encoding='utf-8') as f:
+        reader = csv.reader(f)
+        header = next(reader)
+        count = 0
+        for row in reader:
+            if len(row) < 7:
+                continue
+            product_name = row[5] if len(row) > 5 else ''
+            if 'hacie' not in product_name.lower() and '하시에' not in product_name:
+                continue
+            rank = row[4] if len(row) > 4 else '-'
+            category = row[3] if len(row) > 3 else '-'
+            if len(product_name) > 40:
+                product_name = product_name[:40] + '...'
+            items.append(f'{rank}위. {product_name} ({category})')
+            count += 1
+            if count >= 5:
+                break
+    print('\n'.join(items))
+except Exception as e:
+    print('데이터 추출 오류')
+")
+          fi
+          
+          # Repository URL
+          repo_url="https://github.com/${GITHUB_REPOSITORY}"
+          file_path="output/${year}/${month}/${day}"
+          file_url="${repo_url}/tree/master/${file_path}"
+          
+          # Slack 메시지 생성
+          if [ $hacie_count -gt 0 ]; then
+            status_emoji="✅"
+            status_color="good"
+            summary_text="HACIE 상품 *${hacie_count}개* 발견!"
+          else
+            status_emoji="⚠️"
+            status_color="warning"
+            summary_text="HACIE 상품이 발견되지 않았습니다."
+          fi
+          
+          # JSON payload 생성
+          payload=$(cat <<EOF
+{
+  "text": "${status_emoji} HACIE 일일 순위 추적 완료",
+  "attachments": [
+    {
+      "color": "${status_color}",
+      "title": "📊 ${year}년 ${month}월 ${day}일 순위 분석",
+      "title_link": "${file_url}",
+      "fields": [
+        {
+          "title": "발견 상품",
+          "value": "${hacie_count}개",
+          "short": true
+        },
+        {
+          "title": "분석 시각",
+          "value": "${kst_time} KST",
+          "short": true
+        },
+        {
+          "title": "데이터 파일",
+          "value": "\`${csv_name}\`",
+          "short": false
+        }
+      ],
+      "footer": "GitHub Actions",
+      "footer_icon": "https://github.githubassets.com/images/modules/logos_page/GitHub-Mark.png",
+      "ts": $(date +%s)
+    }
+  ]
+}
+EOF
+)
+          
+          # 상위 5개 상품이 있으면 추가
+          if [ ! -z "$top5_text" ]; then
+            payload=$(cat <<EOF
+{
+  "text": "${status_emoji} HACIE 일일 순위 추적 완료",
+  "attachments": [
+    {
+      "color": "${status_color}",
+      "title": "📊 ${year}년 ${month}월 ${day}일 순위 분석",
+      "title_link": "${file_url}",
+      "fields": [
+        {
+          "title": "발견 상품",
+          "value": "${hacie_count}개",
+          "short": true
+        },
+        {
+          "title": "분석 시각",
+          "value": "${kst_time} KST",
+          "short": true
+        },
+        {
+          "title": "데이터 파일",
+          "value": "\`${csv_name}\`",
+          "short": false
+        },
+        {
+          "title": "🏆 상위 5개 상품",
+          "value": "${top5_text}",
+          "short": false
+        }
+      ],
+      "footer": "GitHub Actions",
+      "footer_icon": "https://github.githubassets.com/images/modules/logos_page/GitHub-Mark.png",
+      "ts": $(date +%s)
+    }
+  ]
+}
+EOF
+)
+          fi
+          
+          # Slack 웹훅 전송
+          echo "📤 Slack 알림 전송 중..."
+          response=$(curl -X POST \
+            -H 'Content-type: application/json' \
+            --data "$payload" \
+            -w "\n%{http_code}" \
+            -s \
+            "$SLACK_WEBHOOK_URL")
+          
+          http_code=$(echo "$response" | tail -n 1)
+          
+          if [ "$http_code" = "200" ]; then
+            echo "✅ Slack 알림 전송 성공!"
+          else
+            echo "⚠️ Slack 알림 전송 실패 (HTTP ${http_code})"
+            echo "Response: $(echo "$response" | head -n -1)"
+          fi
