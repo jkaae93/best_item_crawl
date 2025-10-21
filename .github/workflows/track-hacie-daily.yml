@@ -171,17 +171,17 @@ jobs:
           
           # 요약 파일 생성
           cat > "$summary_file" << 'EOF_HEADER'
-# 📊 일일 요약
+          # 📊 일일 요약
 
-**분석 시각:** KST_PLACEHOLDER  
-**데이터 파일:** `CSV_NAME_PLACEHOLDER`  
-**발견된 HACIE 상품:** HACIE_COUNT_PLACEHOLDER개
+          **분석 시각:** KST_PLACEHOLDER  
+          **데이터 파일:** `CSV_NAME_PLACEHOLDER`  
+          **발견된 HACIE 상품:** HACIE_COUNT_PLACEHOLDER개
 
----
+          ---
 
-## 📋 상위 10개 상품
+          ## 📋 상위 10개 상품
 
-EOF_HEADER
+          EOF_HEADER
           
           # 플레이스홀더 치환
           sed -i "s/KST_PLACEHOLDER/$(date '+%Y-%m-%d %H:%M:%S') KST/" "$summary_file"
@@ -191,141 +191,102 @@ EOF_HEADER
           if [ $hacie_count -gt 0 ]; then
             # 테이블 헤더 추가
             cat >> "$summary_file" << 'EOF_TABLE'
-| 순위 | 카테고리 | 상품명 | 가격 |
-|:----:|---------|--------|-----:|
-EOF_TABLE
+          | 순위 | 카테고리 | 상품명 | 가격 |
+          |:----:|---------|--------|-----:|
+          EOF_TABLE
             
-            # Python으로 CSV 파싱 (더 정확함)
-            python3 << 'EOF_PYTHON' >> "$summary_file"
-import csv
-import sys
-
-csv_file = sys.argv[1] if len(sys.argv) > 1 else ""
-
-try:
-    with open(csv_file, 'r', encoding='utf-8') as f:
-        reader = csv.reader(f)
-        header = next(reader)  # 헤더 스킵
-        
-        count = 0
-        for row in reader:
-            if len(row) < 7:
-                continue
-            
-            # 상품명에서 HACIE 검색 (대소문자 무시)
-            product_name = row[5] if len(row) > 5 else ""
-            if 'hacie' not in product_name.lower() and '하시에' not in product_name:
-                continue
-            
-            # 데이터 추출
-            rank = row[4] if len(row) > 4 else "-"
-            category = row[3] if len(row) > 3 else "-"
-            price = row[6] if len(row) > 6 else "-"
-            
-            # 상품명 길이 제한
-            if len(product_name) > 50:
-                product_name = product_name[:50] + "..."
-            
-            print(f"| {rank} | {category} | {product_name} | {price} |")
-            
-            count += 1
-            if count >= 10:
-                break
-
-except Exception as e:
-    print(f"| - | - | CSV 파싱 오류: {str(e)} | - |", file=sys.stderr)
-EOF_PYTHON
-python3 -c "
-import csv
-csv_file = '${csv_file}'
-try:
-    with open(csv_file, 'r', encoding='utf-8') as f:
-        reader = csv.reader(f)
-        header = next(reader)
-        count = 0
-        for row in reader:
-            if len(row) < 7:
-                continue
-            product_name = row[5] if len(row) > 5 else ''
-            if 'hacie' not in product_name.lower() and '하시에' not in product_name:
-                continue
-            rank = row[4] if len(row) > 4 else '-'
-            category = row[3] if len(row) > 3 else '-'
-            price = row[6] if len(row) > 6 else '-'
-            if len(product_name) > 50:
-                product_name = product_name[:50] + '...'
-            print(f'| {rank} | {category} | {product_name} | {price} |')
-            count += 1
-            if count >= 10:
-                break
-except Exception as e:
-    print(f'CSV 파싱 오류: {e}')
-" >> "$summary_file"
+            # Python으로 CSV 파싱 (상위 10개)
+            python3 -c "
+          import csv
+          csv_file = '${csv_file}'
+          try:
+              with open(csv_file, 'r', encoding='utf-8') as f:
+                  reader = csv.reader(f)
+                  header = next(reader)
+                  count = 0
+                  for row in reader:
+                      if len(row) < 7:
+                          continue
+                      product_name = row[5] if len(row) > 5 else ''
+                      if 'hacie' not in product_name.lower() and '하시에' not in product_name:
+                          continue
+                      rank = row[4] if len(row) > 4 else '-'
+                      category = row[3] if len(row) > 3 else '-'
+                      price = row[6] if len(row) > 6 else '-'
+                      if len(product_name) > 50:
+                          product_name = product_name[:50] + '...'
+                      print(f'| {rank} | {category} | {product_name} | {price} |')
+                      count += 1
+                      if count >= 10:
+                          break
+          except Exception as e:
+              print(f'CSV 파싱 오류: {e}')
+          " >> "$summary_file"
             
             # 전체 상품 목록 섹션
             cat >> "$summary_file" << 'EOF_DETAILS'
 
----
+          ---
 
-## 📦 전체 HACIE 상품 목록
+          ## 📦 전체 HACIE 상품 목록
 
-<details>
-<summary>펼쳐서 보기 (전체 ITEM_COUNT_PLACEHOLDER개)</summary>
+          <details>
+          <summary>펼쳐서 보기 (전체 ITEM_COUNT_PLACEHOLDER개)</summary>
 
-| 순위 | 카테고리 | 상품명 | 가격 |
-|:----:|---------|--------|-----:|
-EOF_DETAILS
+          | 순위 | 카테고리 | 상품명 | 가격 |
+          |:----:|---------|--------|-----:|
+          EOF_DETAILS
             
             sed -i "s/ITEM_COUNT_PLACEHOLDER/${hacie_count}/" "$summary_file"
             
             # 전체 목록 추가
             python3 -c "
-import csv
-csv_file = '${csv_file}'
-try:
-    with open(csv_file, 'r', encoding='utf-8') as f:
-        reader = csv.reader(f)
-        header = next(reader)
-        for row in reader:
-            if len(row) < 7:
-                continue
-            product_name = row[5] if len(row) > 5 else ''
-            if 'hacie' not in product_name.lower() and '하시에' not in product_name:
-                continue
-            rank = row[4] if len(row) > 4 else '-'
-            category = row[3] if len(row) > 3 else '-'
-            price = row[6] if len(row) > 6 else '-'
-            if len(product_name) > 60:
-                product_name = product_name[:60] + '...'
-            print(f'| {rank} | {category} | {product_name} | {price} |')
-except Exception as e:
-    print(f'CSV 파싱 오류: {e}')
-" >> "$summary_file"
+          import csv
+          csv_file = '${csv_file}'
+          try:
+              with open(csv_file, 'r', encoding='utf-8') as f:
+                  reader = csv.reader(f)
+                  header = next(reader)
+                  for row in reader:
+                      if len(row) < 7:
+                          continue
+                      product_name = row[5] if len(row) > 5 else ''
+                      if 'hacie' not in product_name.lower() and '하시에' not in product_name:
+                          continue
+                      rank = row[4] if len(row) > 4 else '-'
+                      category = row[3] if len(row) > 3 else '-'
+                      price = row[6] if len(row) > 6 else '-'
+                      if len(product_name) > 60:
+                          product_name = product_name[:60] + '...'
+                      print(f'| {rank} | {category} | {product_name} | {price} |')
+          except Exception as e:
+              print(f'CSV 파싱 오류: {e}')
+          " >> "$summary_file"
             
             cat >> "$summary_file" << 'EOF_CLOSE'
 
-</details>
-EOF_CLOSE
+          </details>
+          EOF_CLOSE
           else
             cat >> "$summary_file" << 'EOF_NODATA'
 
-**HACIE 상품이 발견되지 않았습니다.**
-
-EOF_NODATA
+          **HACIE 상품이 발견되지 않았습니다.**
+          
+          EOF_NODATA
           fi
           
           # 푸터 추가
           cat >> "$summary_file" << 'EOF_FOOTER'
 
----
-
-**📈 분석 정보**
-- 총 데이터 행 수: LINE_COUNT_PLACEHOLDER 줄
-- CSV 파일명: `CSV_NAME_FOOTER_PLACEHOLDER`
-- 생성 시각: TIME_PLACEHOLDER KST
-
-*자동 생성 by GitHub Actions*
-EOF_FOOTER
+          ---
+          
+          **📈 분석 정보**
+          - 총 데이터 행 수: LINE_COUNT_PLACEHOLDER 줄
+          - CSV 파일명: `CSV_NAME_FOOTER_PLACEHOLDER`
+          - 생성 시각: TIME_PLACEHOLDER KST
+          
+          *자동 생성 by GitHub Actions*
+          EOF_FOOTER
           
           # 플레이스홀더 치환
           line_count=$(wc -l < "$csv_file")
@@ -381,11 +342,11 @@ EOF_FOOTER
             
             commit_msg="📊 HACIE 일일 순위 추적 (${year}.${month}.${day} ${timestamp:0:2}:${timestamp:2:2}:${timestamp:4:2})
 
-- 발견 상품: ${hacie_count}개
-- 분석 시각: ${kst_time}
-- 파일: output/${year}/${month}/${day}/
+          - 발견 상품: ${hacie_count}개
+          - 분석 시각: ${kst_time}
+          - 파일: output/${year}/${month}/${day}/
 
-자동 생성 by GitHub Actions"
+          자동 생성 by GitHub Actions"
             
             git commit -m "$commit_msg"
             
@@ -487,32 +448,32 @@ EOF_FOOTER
           top5_text=""
           if [ $hacie_count -gt 0 ]; then
             top5_text=$(python3 -c "
-import csv
-csv_file = '${csv_file}'
-items = []
-try:
-    with open(csv_file, 'r', encoding='utf-8') as f:
-        reader = csv.reader(f)
-        header = next(reader)
-        count = 0
-        for row in reader:
-            if len(row) < 7:
-                continue
-            product_name = row[5] if len(row) > 5 else ''
-            if 'hacie' not in product_name.lower() and '하시에' not in product_name:
-                continue
-            rank = row[4] if len(row) > 4 else '-'
-            category = row[3] if len(row) > 3 else '-'
-            if len(product_name) > 40:
-                product_name = product_name[:40] + '...'
-            items.append(f'{rank}위. {product_name} ({category})')
-            count += 1
-            if count >= 5:
-                break
-    print('\n'.join(items))
-except Exception as e:
-    print('데이터 추출 오류')
-")
+          import csv
+          csv_file = '${csv_file}'
+          items = []
+          try:
+              with open(csv_file, 'r', encoding='utf-8') as f:
+                  reader = csv.reader(f)
+                  header = next(reader)
+                  count = 0
+                  for row in reader:
+                      if len(row) < 7:
+                          continue
+                      product_name = row[5] if len(row) > 5 else ''
+                      if 'hacie' not in product_name.lower() and '하시에' not in product_name:
+                          continue
+                      rank = row[4] if len(row) > 4 else '-'
+                      category = row[3] if len(row) > 3 else '-'
+                      if len(product_name) > 40:
+                          product_name = product_name[:40] + '...'
+                      items.append(f'{rank}위. {product_name} ({category})')
+                      count += 1
+                      if count >= 5:
+                          break
+              print('\n'.join(items))
+          except Exception as e:
+              print('데이터 추출 오류')
+          ")
           fi
           
           # Repository URL
@@ -533,79 +494,79 @@ except Exception as e:
           
           # JSON payload 생성
           payload=$(cat <<EOF
-{
-  "text": "${status_emoji} HACIE 일일 순위 추적 완료",
-  "attachments": [
-    {
-      "color": "${status_color}",
-      "title": "📊 ${year}년 ${month}월 ${day}일 순위 분석",
-      "title_link": "${file_url}",
-      "fields": [
-        {
-          "title": "발견 상품",
-          "value": "${hacie_count}개",
-          "short": true
-        },
-        {
-          "title": "분석 시각",
-          "value": "${kst_time} KST",
-          "short": true
-        },
-        {
-          "title": "데이터 파일",
-          "value": "\`${csv_name}\`",
-          "short": false
-        }
-      ],
-      "footer": "GitHub Actions",
-      "footer_icon": "https://github.githubassets.com/images/modules/logos_page/GitHub-Mark.png",
-      "ts": $(date +%s)
-    }
-  ]
-}
-EOF
-)
+          {
+            "text": "${status_emoji} HACIE 일일 순위 추적 완료",
+            "attachments": [
+              {
+                "color": "${status_color}",
+                "title": "📊 ${year}년 ${month}월 ${day}일 순위 분석",
+                "title_link": "${file_url}",
+                "fields": [
+                  {
+                    "title": "발견 상품",
+                    "value": "${hacie_count}개",
+                    "short": true
+                  },
+                  {
+                    "title": "분석 시각",
+                    "value": "${kst_time} KST",
+                    "short": true
+                  },
+                  {
+                    "title": "데이터 파일",
+                    "value": "\`${csv_name}\`",
+                    "short": false
+                  }
+                ],
+                "footer": "GitHub Actions",
+                "footer_icon": "https://github.githubassets.com/images/modules/logos_page/GitHub-Mark.png",
+                "ts": $(date +%s)
+              }
+            ]
+          }
+          EOF
+          )
           
           # 상위 5개 상품이 있으면 추가
           if [ ! -z "$top5_text" ]; then
             payload=$(cat <<EOF
-{
-  "text": "${status_emoji} HACIE 일일 순위 추적 완료",
-  "attachments": [
-    {
-      "color": "${status_color}",
-      "title": "📊 ${year}년 ${month}월 ${day}일 순위 분석",
-      "title_link": "${file_url}",
-      "fields": [
-        {
-          "title": "발견 상품",
-          "value": "${hacie_count}개",
-          "short": true
-        },
-        {
-          "title": "분석 시각",
-          "value": "${kst_time} KST",
-          "short": true
-        },
-        {
-          "title": "데이터 파일",
-          "value": "\`${csv_name}\`",
-          "short": false
-        },
-        {
-          "title": "🏆 상위 5개 상품",
-          "value": "${top5_text}",
-          "short": false
-        }
-      ],
-      "footer": "GitHub Actions",
-      "footer_icon": "https://github.githubassets.com/images/modules/logos_page/GitHub-Mark.png",
-      "ts": $(date +%s)
-    }
-  ]
-}
-EOF
-)
+          {
+            "text": "${status_emoji} HACIE 일일 순위 추적 완료",
+            "attachments": [
+              {
+                "color": "${status_color}",
+                "title": "📊 ${year}년 ${month}월 ${day}일 순위 분석",
+                "title_link": "${file_url}",
+                "fields": [
+                  {
+                    "title": "발견 상품",
+                    "value": "${hacie_count}개",
+                    "short": true
+                  },
+                  {
+                    "title": "분석 시각",
+                    "value": "${kst_time} KST",
+                    "short": true
+                  },
+                  {
+                    "title": "데이터 파일",
+                    "value": "\`${csv_name}\`",
+                    "short": false
+                  },
+                  {
+                    "title": "🏆 상위 5개 상품",
+                    "value": "${top5_text}",
+                    "short": false
+                  }
+                ],
+                "footer": "GitHub Actions",
+                "footer_icon": "https://github.githubassets.com/images/modules/logos_page/GitHub-Mark.png",
+                "ts": $(date +%s)
+              }
+            ]
+          }
+          EOF
+          )
           fi
           
           # Slack 웹훅 전송
