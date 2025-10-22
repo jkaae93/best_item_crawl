@@ -50,5 +50,3 @@ test_*
 # 개발 중 생성되는 임시 데이터 (output은 커밋하므로 제외)
 runtime_*.html
 
-output/*
-!output/README.md
