@@ -37,6 +37,7 @@ jobs:
           python3 -c "import playwright; import requests; print('✅ 패키지 설치 확인 완료')"
       
       - name: Set KST timezone
+        shell: bash
         run: |
           # 시스템 timezone 설정
           ln -sf /usr/share/zoneinfo/Asia/Seoul /etc/localtime
@@ -49,6 +50,7 @@ jobs:
       
       - name: Run HACIE rankings tracker
         id: track
+        shell: bash
         env:
           PYTHONUNBUFFERED: "1"
         run: |
@@ -92,6 +94,7 @@ jobs:
       
       - name: Organize files by date
         id: organize
+        shell: bash
         run: |
           # KST 기준 날짜 및 시간
           year=$(date '+%Y')
@@ -134,6 +137,7 @@ jobs:
       
       - name: Generate daily summary
         if: steps.organize.outputs.file_exists == 'true'
+        shell: bash
         run: |
           csv_file="${{ steps.organize.outputs.csv_file }}"
           year="${{ steps.organize.outputs.year }}"
@@ -179,6 +183,7 @@ jobs:
       
       - name: Commit and push results
         if: steps.organize.outputs.file_exists == 'true'
+        shell: bash
         run: |
           # Git 안전 디렉토리 설정 (container 환경)
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
@@ -260,19 +265,24 @@ jobs:
       
       - name: Create summary
         if: steps.organize.outputs.file_exists == 'true'
+        shell: bash
         run: |
           csv_file="${{ steps.organize.outputs.csv_file }}"
           year="${{ steps.organize.outputs.year }}"
           month="${{ steps.organize.outputs.month }}"
           day="${{ steps.organize.outputs.day }}"
-          timestamp="${{ steps.organize.outputs.timestamp }}"
+          time_suffix="${{ steps.organize.outputs.time_suffix }}"
           
           hacie_count=$(grep -iE "HACIE|하시에" "$csv_file" 2>/dev/null | wc -l | xargs)
+          
+          # time_suffix에서 시간 추출 (yyMMdd_HHMMSS -> HH:MM:SS)
+          time_part=$(echo "$time_suffix" | cut -d'_' -f2)
+          formatted_time="${time_part:0:2}:${time_part:2:2}:${time_part:4:2}"
           
           echo "# 🏆 HACIE 일일 순위 추적 결과" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "**날짜:** ${year}년 ${month}월 ${day}일" >> $GITHUB_STEP_SUMMARY
-          echo "**시각:** ${timestamp:0:2}:${timestamp:2:2}:${timestamp:4:2} KST" >> $GITHUB_STEP_SUMMARY
+          echo "**시각:** ${formatted_time} KST" >> $GITHUB_STEP_SUMMARY
           echo "**발견된 HACIE 상품:** ${hacie_count}개" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           
@@ -300,12 +310,13 @@ jobs:
         if: steps.organize.outputs.file_exists == 'true'
         uses: actions/upload-artifact@v4
         with:
-          name: daily-rankings-${{ steps.organize.outputs.year }}${{ steps.organize.outputs.month }}${{ steps.organize.outputs.day }}-${{ steps.organize.outputs.timestamp }}
+          name: daily-rankings-${{ steps.organize.outputs.year }}${{ steps.organize.outputs.month }}${{ steps.organize.outputs.day }}
           path: output/${{ steps.organize.outputs.year }}/${{ steps.organize.outputs.month }}/${{ steps.organize.outputs.day }}/
           retention-days: 90
       
       - name: Send Slack notification
         if: steps.organize.outputs.file_exists == 'true'
+        shell: bash
         env:
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
         run: |
@@ -313,7 +324,7 @@ jobs:
           year="${{ steps.organize.outputs.year }}"
           month="${{ steps.organize.outputs.month }}"
           day="${{ steps.organize.outputs.day }}"
-          timestamp="${{ steps.organize.outputs.timestamp }}"
+          time_suffix="${{ steps.organize.outputs.time_suffix }}"
           csv_name="${{ steps.organize.outputs.csv_name }}"
           
           # HACIE 상품 수 계산
