@@ -121,16 +121,20 @@ class HacieReportGenerator:
         # 카테고리별 집계
         category_stats = defaultdict(lambda: {'count': 0, 'ranks': []})
         for product in all_products:
-            cat_key = f"{product.get('depth1_name', 'N/A')} > {product.get('depth2_name', 'N/A')}"
+            # CSV 필드명 매핑
+            depth1 = product.get('depth1_카테고리') or product.get('depth1_name', 'N/A')
+            depth2 = product.get('depth2_카테고리') or product.get('depth2_name', 'N/A')
+            cat_key = f"{depth1} > {depth2}"
             category_stats[cat_key]['count'] += 1
             try:
-                rank = int(product.get('rank', 999))
+                # CSV 필드명 매핑
+                rank = int(product.get('순위') or product.get('rank', 999))
                 category_stats[cat_key]['ranks'].append(rank)
             except:
                 pass
         
         # 베스트 순위 상품
-        top_products = sorted(all_products, key=lambda x: int(x.get('rank', 999)))[:10]
+        top_products = sorted(all_products, key=lambda x: int(x.get('순위') or x.get('rank', 999)))[:10]
         
         # 리포트 생성
         report = f"""# 📊 HACIE 브랜드 주간 통계 리포트
@@ -175,10 +179,21 @@ class HacieReportGenerator:
 """
         
         for idx, product in enumerate(top_products[:10], 1):
-            name = product.get('productName', 'N/A')[:40]
-            category = product.get('depth2_name', 'N/A')
+            # CSV 필드명 매핑
+            name = product.get('상품명') or product.get('productName', 'N/A')
+            url = product.get('상품URL') or product.get('productUrl', '')
+            category = product.get('depth2_카테고리') or product.get('depth2_name', 'N/A')
+            
+            # 상품명 길이 제한 및 링크 추가
+            if len(name) > 40:
+                name = name[:40] + '...'
+            if url and url.startswith('http'):
+                name = f"[{name}]({url})"
+            
+            # 가격 포맷팅
             try:
-                price = int(product.get('salePrice', 0))
+                price_val = product.get('가격') or product.get('salePrice', 0)
+                price = int(price_val) if price_val else 0
                 price_str = f"₩{price:,}"
             except:
                 price_str = "N/A"
@@ -261,14 +276,19 @@ class HacieReportGenerator:
         
         # 3. TOP 상품
         for idx, product in enumerate(top_products[:10], 1):
+            # CSV 필드명 매핑
+            depth2 = product.get('depth2_카테고리') or product.get('depth2_name', 'N/A')
+            rank = product.get('순위') or product.get('rank', '')
+            name = product.get('상품명') or product.get('productName', 'N/A')
+            
             csv_data.append({
                 '유형': f'TOP{idx}',
                 '날짜': '',
                 '상품수': '',
-                '카테고리': product.get('depth2_name', 'N/A'),
-                '평균순위': product.get('rank', ''),
+                '카테고리': depth2,
+                '평균순위': rank,
                 '최고순위': '',
-                '상품명': product.get('productName', 'N/A')
+                '상품명': name
             })
         
         # CSV 문자열 생성
@@ -466,21 +486,27 @@ class HacieReportGenerator:
         # 카테고리별 집계
         category_stats = defaultdict(lambda: {'count': 0, 'ranks': [], 'prices': []})
         for product in all_products:
-            cat_key = f"{product.get('depth1_name', 'N/A')} > {product.get('depth2_name', 'N/A')}"
+            # CSV 필드명 매핑
+            depth1 = product.get('depth1_카테고리') or product.get('depth1_name', 'N/A')
+            depth2 = product.get('depth2_카테고리') or product.get('depth2_name', 'N/A')
+            cat_key = f"{depth1} > {depth2}"
             category_stats[cat_key]['count'] += 1
             try:
-                rank = int(product.get('rank', 999))
+                # CSV 필드명 매핑
+                rank = int(product.get('순위') or product.get('rank', 999))
                 category_stats[cat_key]['ranks'].append(rank)
             except:
                 pass
             try:
-                price = int(product.get('salePrice', 0))
+                # CSV 필드명 매핑
+                price_val = product.get('가격') or product.get('salePrice', 0)
+                price = int(price_val) if price_val else 0
                 category_stats[cat_key]['prices'].append(price)
             except:
                 pass
         
         # 월간 베스트 상품
-        top_products = sorted(all_products, key=lambda x: int(x.get('rank', 999)))[:20]
+        top_products = sorted(all_products, key=lambda x: int(x.get('순위') or x.get('rank', 999)))[:20]
         
         # 리포트 생성
         month_name = f"{year}년 {month}월"
@@ -494,7 +520,7 @@ class HacieReportGenerator:
 - **총 발견 상품:** {total_products}개
 - **분석 일수:** {total_days}일
 - **일평균 상품 수:** {avg_per_day:.1f}개
-- **월 평균 순위:** {statistics.mean([int(p.get('rank', 999)) for p in all_products]):.1f}위
+- **월 평균 순위:** {statistics.mean([int(p.get('순위') or p.get('rank', 999)) for p in all_products]):.1f}위
 
 ## 📅 주별 추이
 
@@ -549,11 +575,23 @@ class HacieReportGenerator:
 """
         
         for idx, product in enumerate(top_products[:20], 1):
-            name = product.get('productName', 'N/A')[:40]
-            category = f"{product.get('depth1_name', '')} > {product.get('depth2_name', '')}"[:25]
+            # CSV 필드명 매핑
+            name = product.get('상품명') or product.get('productName', 'N/A')
+            url = product.get('상품URL') or product.get('productUrl', '')
+            depth1 = product.get('depth1_카테고리') or product.get('depth1_name', '')
+            depth2 = product.get('depth2_카테고리') or product.get('depth2_name', '')
+            category = f"{depth1} > {depth2}"[:25]
             
+            # 상품명 길이 제한 및 링크 추가
+            if len(name) > 40:
+                name = name[:40] + '...'
+            if url and url.startswith('http'):
+                name = f"[{name}]({url})"
+            
+            # 가격 포맷팅
             try:
-                price = int(product.get('salePrice', 0))
+                price_val = product.get('가격') or product.get('salePrice', 0)
+                price = int(price_val) if price_val else 0
                 price_str = f"₩{price:,}"
             except:
                 price_str = "N/A"
@@ -692,11 +730,16 @@ class HacieReportGenerator:
         
         # 3. TOP 상품
         for idx, product in enumerate(top_products[:20], 1):
-            name = product.get('productName', 'N/A')
-            category = f"{product.get('depth1_name', '')} > {product.get('depth2_name', '')}"
+            # CSV 필드명 매핑
+            name = product.get('상품명') or product.get('productName', 'N/A')
+            depth1 = product.get('depth1_카테고리') or product.get('depth1_name', '')
+            depth2 = product.get('depth2_카테고리') or product.get('depth2_name', '')
+            category = f"{depth1} > {depth2}"
+            rank = product.get('순위') or product.get('rank', '')
             
             try:
-                price = int(product.get('salePrice', 0))
+                price_val = product.get('가격') or product.get('salePrice', 0)
+                price = int(price_val) if price_val else 0
                 price_str = str(price)
             except:
                 price_str = "0"
@@ -707,7 +750,7 @@ class HacieReportGenerator:
                 '상품수': '',
                 '일평균': '',
                 '카테고리': category,
-                '평균순위': product.get('rank', ''),
+                '평균순위': rank,
                 '평균가격': price_str,
                 '상품명': name
             })
