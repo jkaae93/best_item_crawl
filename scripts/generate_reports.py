@@ -10,6 +10,7 @@ from datetime import datetime, timedelta
 from typing import List, Dict, Optional
 from collections import defaultdict
 import statistics
+from zoneinfo import ZoneInfo
 
 
 class HacieReportGenerator:
@@ -239,7 +240,7 @@ class HacieReportGenerator:
         report += f"""
 ---
 
-*생성 일시: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} KST*  
+*생성 일시: {datetime.now(ZoneInfo("Asia/Seoul")).strftime('%Y-%m-%d %H:%M:%S')} KST*  
 *데이터 출처: W컨셉 베스트 페이지*
 """
         
@@ -326,8 +327,8 @@ class HacieReportGenerator:
         except:
             github_link = None
         
-        # 현재 시각
-        now = datetime.now()
+        # 현재 시각 (KST)
+        now = datetime.now(ZoneInfo("Asia/Seoul"))
         kst_time = now.strftime('%Y-%m-%d %H:%M:%S')
         
         # 리포트 생성
@@ -684,7 +685,7 @@ class HacieReportGenerator:
         report += f"""
 ---
 
-*생성 일시: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} KST*  
+*생성 일시: {datetime.now(ZoneInfo("Asia/Seoul")).strftime('%Y-%m-%d %H:%M:%S')} KST*  
 *데이터 출처: W컨셉 베스트 페이지 ({total_days}일간 데이터)*
 """
         
