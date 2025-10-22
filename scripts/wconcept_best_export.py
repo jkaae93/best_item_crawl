@@ -413,12 +413,20 @@ def pick_brand(product: Dict[str, Any]) -> str:
 
 
 def pick_rank(idx: int, product: Dict[str, Any]) -> int:
+    """순위 추출 - 원래 순위(_original_rank) 우선 사용"""
+    # 필터링 전 저장된 원래 순위 사용
+    if '_original_rank' in product:
+        return int(product['_original_rank'])
+    
+    # API 응답에서 순위 필드 확인
     for key in ("rank", "ranking", "bestOrder", "exposeOrder", "order"):
         if key in product:
             try:
                 return int(product[key])
             except Exception:
                 continue
+    
+    # 마지막 fallback: 현재 인덱스 + 1
     return idx + 1
 
 
@@ -442,16 +450,23 @@ def pick_url(product: Dict[str, Any]) -> str:
 
 
 def filter_products_by_brand(products: List[Dict[str, Any]], allowed_brands: List[str]) -> List[Dict[str, Any]]:
+    """브랜드로 필터링하고 원래 순위(인덱스) 저장"""
     if not products:
         return []
     allowed_exact_korean = {b.strip() for b in allowed_brands if b.strip() and not b.strip().isascii()}
     allowed_english_casefold = {b.strip().casefold() for b in allowed_brands if b.strip() and b.strip().isascii()}
 
     filtered: List[Dict[str, Any]] = []
-    for p in products:
+    for idx, p in enumerate(products):
         brand = pick_brand(p).strip()
         if not brand:
             continue
+        
+        # 원래 순위(배열 인덱스 + 1) 저장
+        # API 응답에 순위 필드가 없으므로 배열 순서가 곧 순위
+        if '_original_rank' not in p:
+            p['_original_rank'] = idx + 1
+        
         if brand in allowed_exact_korean:
             filtered.append(p)
             continue
