@@ -100,45 +100,40 @@ jobs:
           exit 1
         continue-on-error: false
       
-      - name: Organize files by date
+      - name: Find generated CSV file
         id: organize
         shell: bash
         run: |
-          # 최신 CSV 파일 찾기 (output 폴더에서 직접 생성됨)
-          if ls output/wconcept_best_*.csv 1> /dev/null 2>&1; then
-            latest_csv=$(ls -t output/wconcept_best_*.csv | head -1)
+          # Python 스크립트가 KST 기준으로 생성한 날짜 폴더에서 CSV 파일 찾기
+          # 폴더 구조: output/YYYY/MM/DD/wconcept_best_yyMMdd_HHMMSS.csv
+          
+          # 최신 CSV 파일 찾기 (재귀 검색)
+          latest_csv=$(find output -name "wconcept_best_*.csv" -type f -printf '%T+ %p\n' 2>/dev/null | sort -r | head -1 | cut -d' ' -f2-)
+          
+          if [ -n "$latest_csv" ] && [ -f "$latest_csv" ]; then
             echo "📂 발견된 CSV 파일: $latest_csv"
             
+            # 파일 경로에서 날짜 정보 추출
+            # 예: output/2025/10/22/wconcept_best_251022_090916.csv
+            csv_dir=$(dirname "$latest_csv")
+            year=$(echo "$csv_dir" | cut -d'/' -f2)
+            month=$(echo "$csv_dir" | cut -d'/' -f3)
+            day=$(echo "$csv_dir" | cut -d'/' -f4)
+            
+            # 파일명에서 타임스탬프 추출
             csv_basename=$(basename "$latest_csv")
-            # 파일명에서 타임스탬프 추출: wconcept_best_251022_090916.csv -> 251022_090916
+            # wconcept_best_251022_090916.csv -> 251022_090916
             time_suffix=$(echo "$csv_basename" | sed -E 's/wconcept_best_([0-9]{6}_[0-9]{6})\.csv/\1/')
-            
-            # 타임스탬프에서 날짜 추출: 251022_090916 -> 251022
-            date_part=$(echo "$time_suffix" | cut -d'_' -f1)
-            
-            # 날짜 파싱: 251022 -> 2025/10/22
-            year="20${date_part:0:2}"  # 25 -> 2025
-            month="${date_part:2:2}"   # 10
-            day="${date_part:4:2}"     # 22
-            
-            echo "📅 CSV 파일명에서 추출한 날짜: ${year}년 ${month}월 ${day}일"
-            
-            # yyyy/MM/dd 폴더 생성
-            mkdir -p "output/${year}/${month}/${day}"
-            
-            # 파일 이동
-            new_csv_path="output/${year}/${month}/${day}/${csv_basename}"
-            mv "$latest_csv" "$new_csv_path"
             
             echo "year=${year}" >> $GITHUB_OUTPUT
             echo "month=${month}" >> $GITHUB_OUTPUT
             echo "day=${day}" >> $GITHUB_OUTPUT
             echo "time_suffix=${time_suffix}" >> $GITHUB_OUTPUT
             echo "file_exists=true" >> $GITHUB_OUTPUT
-            echo "csv_file=${new_csv_path}" >> $GITHUB_OUTPUT
+            echo "csv_file=${latest_csv}" >> $GITHUB_OUTPUT
             echo "csv_name=${csv_basename}" >> $GITHUB_OUTPUT
             
-            echo "✓ CSV 파일 이동: ${new_csv_path}"
+            echo "📅 Python 스크립트가 생성한 날짜: ${year}년 ${month}월 ${day}일"
             echo "⏰ 타임스탬프: ${time_suffix}"
           else
             echo "file_exists=false" >> $GITHUB_OUTPUT
