@@ -18,14 +18,6 @@ permissions:
   contents: write
 
 jobs:
-  build:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: szenius/set-timezone@v1
-        with:
-          timezoneLinux: 'Asia/Seoul'
-      - run: echo "현재 시간은 $(date)"
   monthly-report:
     runs-on: ubuntu-latest
     
