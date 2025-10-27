@@ -590,12 +590,17 @@ def fetch_all_products_for_category(
 
 def write_csv(rows: List[List[Any]], output_dir: Path, timestamp: datetime) -> Tuple[Path, str]:
     """CSV 파일 작성 및 타임스탬프 반환"""
-    output_dir.mkdir(parents=True, exist_ok=True)
+    # KST 기준 날짜별 폴더 생성: output/YYYY/MM/DD/
+    year = timestamp.strftime('%Y')
+    month = timestamp.strftime('%m')
+    day = timestamp.strftime('%d')
+    date_dir = output_dir / year / month / day
+    date_dir.mkdir(parents=True, exist_ok=True)
     
     # 파일명: yyMMdd_hhmmss.csv
     time_suffix = timestamp.strftime('%y%m%d_%H%M%S')
     filename = f"wconcept_best_{time_suffix}.csv"
-    out_path = output_dir / filename
+    out_path = date_dir / filename
     
     headers = ["날짜", "시간", "브랜드명", "depth1_카테고리", "depth2_카테고리", "순위", "상품명", "가격", "상품URL"]
     with out_path.open("w", newline="", encoding="utf-8") as f:
