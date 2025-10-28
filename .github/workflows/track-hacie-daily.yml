@@ -40,15 +40,16 @@ jobs:
         shell: bash
         run: |
           # 시스템 timezone 설정
+          export DEBIAN_FRONTEND=noninteractive
           apt-get update -y
           apt-get install -y tzdata
+      
           ln -sf /usr/share/zoneinfo/Asia/Seoul /etc/localtime
           echo "Asia/Seoul" > /etc/timezone
-          
-          # 확인
+      
           echo "현재 시스템 시간: $(date '+%Y-%m-%d %H:%M:%S %Z')"
-          echo "Python에서 인식하는 시간:"
-          python3 -c "from datetime import datetime; print(datetime.now().strftime('%Y-%m-%d %H:%M:%S'))"
+          python3 - <<'PY'
+          
           from datetime import datetime
           import pytz
           kst = pytz.timezone("Asia/Seoul")
