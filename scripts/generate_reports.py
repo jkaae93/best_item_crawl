@@ -511,7 +511,16 @@ class HacieReportGenerator:
         
         # 리포트 생성
         month_name = f"{year}년 {month}월"
-        
+
+        if all_products:
+            monthly_avg_rank_value = statistics.mean(
+                [int(p.get('순위') or p.get('rank', 999)) for p in all_products]
+            )
+            monthly_avg_rank_text = f"{monthly_avg_rank_value:.1f}위"
+        else:
+            monthly_avg_rank_value = None
+            monthly_avg_rank_text = "데이터 없음"
+
         report = f"""# 📊 HACIE 브랜드 월간 통계 리포트
 
 **분석 기간:** {month_name} ({start_date.strftime('%Y-%m-%d')} ~ {end_date.strftime('%Y-%m-%d')})
@@ -521,7 +530,7 @@ class HacieReportGenerator:
 - **총 발견 상품:** {total_products}개
 - **분석 일수:** {total_days}일
 - **일평균 상품 수:** {avg_per_day:.1f}개
-- **월 평균 순위:** {statistics.mean([int(p.get('순위') or p.get('rank', 999)) for p in all_products]):.1f}위
+- **월 평균 순위:** {monthly_avg_rank_text}
 
 ## 📅 주별 추이
 
