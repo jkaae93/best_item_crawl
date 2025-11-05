@@ -336,11 +336,18 @@ class HacieReportGenerator:
         for csv_file in csv_files:
             products = self.parse_csv(csv_file)
             all_products.extend(products)
-            
+
             # 날짜별 통계
-            file_date = csv_file.parent.name
+            try:
+                year_dir = int(csv_file.parent.parent.parent.name)
+                month_dir = int(csv_file.parent.parent.name)
+                day_dir = int(csv_file.parent.name)
+                file_date = date(year_dir, month_dir, day_dir)
+            except (AttributeError, ValueError):
+                file_date = self._parse_date(products[0].get('날짜') if products else None) or start_date.date()
+
             daily_stats[file_date] = len(products)
-            
+
             # GitHub 링크 생성
             relative_path = csv_file.relative_to(self.output_dir)
             github_link = f"https://github.com/kaae/best_item_crawl/blob/master/output/{relative_path}"
@@ -395,9 +402,8 @@ class HacieReportGenerator:
 |------|------------:|
 """
         
-        for date_str, count in sorted(daily_stats.items()):
-            date_obj = datetime.strptime(date_str, '%d')
-            report += f"| {date_obj.strftime('%m월 %d일')} | {count}개 |\n"
+        for record_date, count in sorted(daily_stats.items()):
+            report += f"| {record_date.strftime('%m월 %d일')} | {count}개 |\n"
         
         report += f"""
 ## 🏆 카테고리별 통계
@@ -474,8 +480,8 @@ class HacieReportGenerator:
 |------|--------|
 """
         
-        for date, filename, link in sorted(file_links):
-            report += f"| {date}일 | [{filename}]({link}) |\n"
+        for record_date, filename, link in sorted(file_links):
+            report += f"| {record_date.strftime('%m월 %d일')} | [{filename}]({link}) |\n"
         
         report += f"""
 ---
@@ -488,10 +494,10 @@ class HacieReportGenerator:
         csv_data = []
         
         # 1. 일별 통계
-        for date_str, count in sorted(daily_stats.items()):
+        for record_date, count in sorted(daily_stats.items()):
             csv_data.append({
                 '유형': '일별통계',
-                '날짜': date_str,
+                '날짜': record_date.strftime('%Y-%m-%d'),
                 '상품수': count,
                 '카테고리': '',
                 '평균순위': '',

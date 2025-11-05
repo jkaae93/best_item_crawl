@@ -393,6 +393,69 @@ def pick_price(product: Dict[str, Any]) -> Optional[int]:
     return None
 
 
+def pick_discount_rate(product: Dict[str, Any]) -> Optional[str]:
+    """상품 데이터에서 할인율 추출"""
+    numeric_candidates = (
+        "discountRate",
+        "discount_rate",
+        "discountRateValue",
+        "discountRatePercent",
+        "discountRatePercentage",
+        "saleRate",
+        "sale_rate",
+        "saleRatePercent",
+        "saleRatePercentage",
+        "dcRate",
+        "rate",
+    )
+
+    for key in numeric_candidates:
+        if key not in product:
+            continue
+        value = product.get(key)
+        if value in (None, ""):
+            continue
+
+        try:
+            if isinstance(value, str):
+                cleaned = value.strip().replace("%", "").replace(",", "")
+                if not cleaned:
+                    continue
+                number = float(cleaned)
+            else:
+                number = float(value)
+        except (TypeError, ValueError):
+            continue
+
+        if number < 0:
+            continue
+
+        if number <= 1:
+            number *= 100
+
+        if number.is_integer():
+            number = int(number)
+
+        return f"{number}%"
+
+    text_candidates = (
+        "discountRateText",
+        "saleRateText",
+        "discountText",
+        "discount_rate_text",
+    )
+
+    for key in text_candidates:
+        value = product.get(key)
+        if isinstance(value, str) and value.strip():
+            stripped = value.strip()
+            if stripped.endswith("%"):
+                return stripped
+            return f"{stripped}%"
+
+    return None
+
+
 def pick_name(product: Dict[str, Any]) -> str:
     for key in ("itemName", "productName", "name", "goodsName", "title"):
         if key in product and product[key]:
@@ -602,7 +665,7 @@ def write_csv(rows: List[List[Any]], output_dir: Path, timestamp: datetime) -> T
     filename = f"wconcept_best_{time_suffix}.csv"
     out_path = date_dir / filename
     
-    headers = ["날짜", "시간", "브랜드명", "depth1_카테고리", "depth2_카테고리", "순위", "상품명", "가격", "상품URL"]
+    headers = ["날짜", "시간", "브랜드명", "depth1_카테고리", "depth2_카테고리", "순위", "상품명", "가격", "할인율", "상품URL"]
     with out_path.open("w", newline="", encoding="utf-8") as f:
         writer = csv.writer(f)
         writer.writerow(headers)
@@ -732,6 +795,7 @@ def main():
             brand = pick_brand(p)
             name = pick_name(p)
             price = pick_price(p)
+            discount_rate = pick_discount_rate(p)
             url = pick_url(p)
             rows.append(
                 [
@@ -743,6 +807,7 @@ def main():
                     rank,
                     name,
                     price if price is not None else "",
+                    discount_rate if discount_rate is not None else "",
                     url,
                 ]
             )
