@@ -6,7 +6,7 @@ HACIE 브랜드 주간/월간 통계 리포트 생성
 import json
 import csv
 from pathlib import Path
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date
 from typing import List, Dict, Optional
 from collections import defaultdict
 import statistics
@@ -21,6 +21,148 @@ class HacieReportGenerator:
             output_dir = Path(__file__).parent.parent / 'output'
         self.output_dir = output_dir
     
+    @staticmethod
+    def _get_product_key(product: Dict) -> Optional[str]:
+        """상품을 대표할 고유 키 추출"""
+        return (
+            product.get('상품URL')
+            or product.get('productUrl')
+            or product.get('상품ID')
+            or product.get('productId')
+            or product.get('상품명')
+            or product.get('productName')
+        )
+
+    @staticmethod
+    def _parse_date(date_str: Optional[str]) -> Optional[date]:
+        """문자열을 날짜 객체로 변환"""
+        if not date_str:
+            return None
+
+        for fmt in ('%Y-%m-%d', '%Y/%m/%d', '%Y.%m.%d'):
+            try:
+                return datetime.strptime(date_str, fmt).date()
+            except ValueError:
+                continue
+        return None
+
+    @staticmethod
+    def _is_earlier_date(candidate: Optional[date], current: Optional[date]) -> bool:
+        """두 날짜 중 앞선 날짜인지 확인"""
+        if candidate is None:
+            return False
+        if current is None:
+            return True
+        return candidate < current
+
+    @staticmethod
+    def _parse_int_value(value) -> Optional[int]:
+        """숫자 형태 문자열을 정수로 변환"""
+        if value in (None, ''):
+            return None
+        try:
+            return int(str(value).replace(',', '').strip())
+        except (TypeError, ValueError):
+            return None
+
+    @staticmethod
+    def _format_price(value: Optional[int]) -> str:
+        """가격 문자열 포맷"""
+        if value is None:
+            return "N/A"
+        try:
+            return f"₩{int(value):,}"
+        except (TypeError, ValueError):
+            return "N/A"
+
+    @staticmethod
+    def _format_date_label(value: Optional[date]) -> str:
+        """리포트 출력용 날짜 문자열"""
+        if not value:
+            return "-"
+        return value.strftime('%Y-%m-%d')
+
+    def _price_display_from_entry(self, entry: Dict) -> str:
+        """집계된 상품 정보에서 표시용 가격 문자열 산출"""
+        price_str = self._format_price(entry.get('price'))
+        if price_str != "N/A":
+            return price_str
+
+        best_record = entry.get('best_record') or {}
+        raw_price = best_record.get('가격') or best_record.get('salePrice')
+        parsed_price = self._parse_int_value(raw_price)
+        if parsed_price is not None:
+            return self._format_price(parsed_price)
+        return raw_price if raw_price else "N/A"
+
+    def _price_value_from_entry(self, entry: Dict) -> str:
+        """CSV용 숫자 가격 값 산출"""
+        price_value = entry.get('price')
+        if price_value is not None:
+            return str(price_value)
+
+        best_record = entry.get('best_record') or {}
+        raw_price = best_record.get('가격') or best_record.get('salePrice')
+        parsed_price = self._parse_int_value(raw_price)
+        if parsed_price is not None:
+            return str(parsed_price)
+        return raw_price or ''
+
+    def _aggregate_product_performance(self, products: List[Dict]) -> Dict[str, Dict]:
+        """상품별 최고 순위 및 기록일 집계"""
+        aggregated: Dict[str, Dict] = {}
+
+        for product in products:
+            key = self._get_product_key(product)
+            if not key:
+                continue
+
+            rank_raw = product.get('순위') or product.get('rank')
+            try:
+                rank = int(str(rank_raw).strip())
+            except (TypeError, ValueError):
+                continue
+
+            record_date = self._parse_date(product.get('날짜') or product.get('date'))
+
+            entry = aggregated.get(key)
+
+            if entry is None:
+                entry = {
+                    'name': product.get('상품명') or product.get('productName', 'N/A'),
+                    'url': product.get('상품URL') or product.get('productUrl', ''),
+                    'category_depth1': product.get('depth1_카테고리') or product.get('depth1_name', ''),
+                    'category_depth2': product.get('depth2_카테고리') or product.get('depth2_name', ''),
+                    'price': self._parse_int_value(product.get('가격') or product.get('salePrice')),
+                    'discount': product.get('discountRate', ''),
+                    'best_rank': rank,
+                    'best_rank_date': record_date,
+                    'best_record': product,
+                    'records': []
+                }
+                aggregated[key] = entry
+
+            entry['records'].append({
+                'rank': rank,
+                'date': record_date
+            })
+
+            best_rank = entry['best_rank']
+            best_date = entry['best_rank_date']
+
+            if rank < best_rank or (rank == best_rank and self._is_earlier_date(record_date, best_date)):
+                entry['name'] = product.get('상품명') or product.get('productName', 'N/A')
+                entry['url'] = product.get('상품URL') or product.get('productUrl', '')
+                entry['category_depth1'] = product.get('depth1_카테고리') or product.get('depth1_name', '')
+                entry['category_depth2'] = product.get('depth2_카테고리') or product.get('depth2_name', '')
+                entry['price'] = self._parse_int_value(product.get('가격') or product.get('salePrice'))
+                entry['discount'] = product.get('discountRate', entry.get('discount', ''))
+                entry['best_rank'] = rank
+                entry['best_rank_date'] = record_date
+                entry['best_record'] = product
+
+        return aggregated
+
     def find_csv_files(self, start_date: datetime, end_date: datetime) -> List[Path]:
         """날짜 범위 내의 CSV 파일 찾기 (각 날짜별 최신 파일만)"""
         csv_files = []
@@ -134,8 +276,14 @@ class HacieReportGenerator:
             except:
                 pass
         
+        # 상품별 최고 순위 집계
+        product_performance = self._aggregate_product_performance(all_products)
+
         # 베스트 순위 상품
-        top_products = sorted(all_products, key=lambda x: int(x.get('순위') or x.get('rank', 999)))[:10]
+        top_products = sorted(
+            product_performance.values(),
+            key=lambda x: (x['best_rank'], x['best_rank_date'] or date.max)
+        )[:10]
         
         # 리포트 생성
         report = f"""# 📊 HACIE 브랜드 주간 통계 리포트
@@ -175,31 +323,26 @@ class HacieReportGenerator:
         report += f"""
 ## 🌟 주간 베스트 TOP 10
 
-| 순위 | 상품명 | 카테고리 | 평균가 |
-|:----:|--------|---------|-------:|
+| 순위 | 상품명 | 카테고리 | 최고 순위 | 기록일 | 평균가 |
+|:----:|--------|---------|---------:|:------:|-------:|
 """
-        
-        for idx, product in enumerate(top_products[:10], 1):
-            # CSV 필드명 매핑
-            name = product.get('상품명') or product.get('productName', 'N/A')
-            url = product.get('상품URL') or product.get('productUrl', '')
-            category = product.get('depth2_카테고리') or product.get('depth2_name', 'N/A')
-            
-            # 상품명 길이 제한 및 링크 추가
+
+        for idx, product in enumerate(top_products, 1):
+            name = product.get('name', 'N/A')
+            url = product.get('url', '')
+            category = product.get('category_depth2') or product.get('category_depth1') or 'N/A'
+
             if len(name) > 40:
                 name = name[:40] + '...'
             if url and url.startswith('http'):
                 name = f"[{name}]({url})"
-            
-            # 가격 포맷팅
-            try:
-                price_val = product.get('가격') or product.get('salePrice', 0)
-                price = int(price_val) if price_val else 0
-                price_str = f"₩{price:,}"
-            except:
-                price_str = "N/A"
-            
-            report += f"| {idx} | {name} | {category} | {price_str} |\n"
+
+            price_str = self._price_display_from_entry(product)
+            best_rank = product.get('best_rank')
+            best_rank_text = f"{best_rank}위" if best_rank is not None else "-"
+            best_date_text = self._format_date_label(product.get('best_rank_date'))
+
+            report += f"| {idx} | {name} | {category} | {best_rank_text} | {best_date_text} | {price_str} |\n"
         
         report += f"""
 ## 💡 주간 인사이트
@@ -276,19 +419,21 @@ class HacieReportGenerator:
             })
         
         # 3. TOP 상품
-        for idx, product in enumerate(top_products[:10], 1):
-            # CSV 필드명 매핑
-            depth2 = product.get('depth2_카테고리') or product.get('depth2_name', 'N/A')
-            rank = product.get('순위') or product.get('rank', '')
-            name = product.get('상품명') or product.get('productName', 'N/A')
-            
+        for idx, product in enumerate(top_products, 1):
+            depth1 = product.get('category_depth1') or ''
+            depth2 = product.get('category_depth2') or ''
+            category = depth2 or depth1 or 'N/A'
+            best_rank = product.get('best_rank')
+            best_date_text = self._format_date_label(product.get('best_rank_date'))
+            name = product.get('name', 'N/A')
+
             csv_data.append({
                 '유형': f'TOP{idx}',
-                '날짜': '',
+                '날짜': best_date_text,
                 '상품수': '',
-                '카테고리': depth2,
-                '평균순위': rank,
-                '최고순위': '',
+                '카테고리': category,
+                '평균순위': '',
+                '최고순위': str(best_rank) if best_rank is not None else '',
                 '상품명': name
             })
         
@@ -506,8 +651,14 @@ class HacieReportGenerator:
             except:
                 pass
         
+        # 상품별 최고 순위 집계
+        product_performance = self._aggregate_product_performance(all_products)
+
         # 월간 베스트 상품
-        top_products = sorted(all_products, key=lambda x: int(x.get('순위') or x.get('rank', 999)))[:20]
+        top_products = sorted(
+            product_performance.values(),
+            key=lambda x: (x['best_rank'], x['best_rank_date'] or date.max)
+        )[:20]
         
         # 리포트 생성
         month_name = f"{year}년 {month}월"
@@ -580,35 +731,32 @@ class HacieReportGenerator:
         report += f"""
 ## 🌟 월간 베스트 TOP 20
 
-| 순위 | 상품명 | 카테고리 | 가격 | 할인율 |
-|:----:|--------|---------|-----:|------:|
+| 순위 | 상품명 | 카테고리 | 최고 순위 | 기록일 | 가격 | 할인율 |
+|:----:|--------|---------|---------:|:------:|-----:|------:|
 """
-        
-        for idx, product in enumerate(top_products[:20], 1):
-            # CSV 필드명 매핑
-            name = product.get('상품명') or product.get('productName', 'N/A')
-            url = product.get('상품URL') or product.get('productUrl', '')
-            depth1 = product.get('depth1_카테고리') or product.get('depth1_name', '')
-            depth2 = product.get('depth2_카테고리') or product.get('depth2_name', '')
-            category = f"{depth1} > {depth2}"[:25]
-            
-            # 상품명 길이 제한 및 링크 추가
+
+        for idx, product in enumerate(top_products, 1):
+            name = product.get('name', 'N/A')
+            url = product.get('url', '')
+            depth1 = product.get('category_depth1') or ''
+            depth2 = product.get('category_depth2') or ''
+            category = " > ".join(filter(None, [depth1, depth2]))
+            category = category if category else 'N/A'
+            if len(category) > 25:
+                category = category[:25] + '...'
+
             if len(name) > 40:
                 name = name[:40] + '...'
             if url and url.startswith('http'):
                 name = f"[{name}]({url})"
-            
-            # 가격 포맷팅
-            try:
-                price_val = product.get('가격') or product.get('salePrice', 0)
-                price = int(price_val) if price_val else 0
-                price_str = f"₩{price:,}"
-            except:
-                price_str = "N/A"
-            
-            discount = product.get('discountRate', '0')
-            
-            report += f"| {idx} | {name} | {category} | {price_str} | {discount}% |\n"
+
+            price_str = self._price_display_from_entry(product)
+            best_rank = product.get('best_rank')
+            best_rank_text = f"{best_rank}위" if best_rank is not None else "-"
+            best_date_text = self._format_date_label(product.get('best_rank_date'))
+            discount = product.get('best_record', {}).get('discountRate', product.get('discount', '0')) or '0'
+
+            report += f"| {idx} | {name} | {category} | {best_rank_text} | {best_date_text} | {price_str} | {discount}% |\n"
         
         report += f"""
 ## 💡 월간 인사이트
@@ -739,28 +887,22 @@ class HacieReportGenerator:
             })
         
         # 3. TOP 상품
-        for idx, product in enumerate(top_products[:20], 1):
-            # CSV 필드명 매핑
-            name = product.get('상품명') or product.get('productName', 'N/A')
-            depth1 = product.get('depth1_카테고리') or product.get('depth1_name', '')
-            depth2 = product.get('depth2_카테고리') or product.get('depth2_name', '')
-            category = f"{depth1} > {depth2}"
-            rank = product.get('순위') or product.get('rank', '')
-            
-            try:
-                price_val = product.get('가격') or product.get('salePrice', 0)
-                price = int(price_val) if price_val else 0
-                price_str = str(price)
-            except:
-                price_str = "0"
+        for idx, product in enumerate(top_products, 1):
+            name = product.get('name', 'N/A')
+            depth1 = product.get('category_depth1') or ''
+            depth2 = product.get('category_depth2') or ''
+            category = " > ".join(filter(None, [depth1, depth2])) or 'N/A'
+            best_rank = product.get('best_rank')
+            best_date_text = self._format_date_label(product.get('best_rank_date'))
+            price_str = self._price_value_from_entry(product)
             
             csv_data.append({
                 '유형': f'TOP{idx}',
-                '기간': '',
+                '기간': best_date_text,
                 '상품수': '',
                 '일평균': '',
                 '카테고리': category,
-                '평균순위': rank,
+                '평균순위': str(best_rank) if best_rank is not None else '',
                 '평균가격': price_str,
                 '상품명': name
             })
