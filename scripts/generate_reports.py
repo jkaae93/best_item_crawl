@@ -5,8 +5,9 @@ HACIE 브랜드 주간/월간 통계 리포트 생성
 
 import json
 import csv
+import os
 from pathlib import Path
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date
 from typing import List, Dict, Optional
 from collections import defaultdict
 import statistics
@@ -21,6 +22,230 @@ class HacieReportGenerator:
             output_dir = Path(__file__).parent.parent / 'output'
         self.output_dir = output_dir
     
+    @staticmethod
+    def _get_product_key(product: Dict) -> Optional[str]:
+        """상품을 대표할 고유 키 추출"""
+        return (
+            product.get('상품URL')
+            or product.get('productUrl')
+            or product.get('상품ID')
+            or product.get('productId')
+            or product.get('상품명')
+            or product.get('productName')
+        )
+
+    @staticmethod
+    def _parse_date(date_str: Optional[str]) -> Optional[date]:
+        """문자열을 날짜 객체로 변환"""
+        if not date_str:
+            return None
+
+        for fmt in ('%Y-%m-%d', '%Y/%m/%d', '%Y.%m.%d'):
+            try:
+                return datetime.strptime(date_str, fmt).date()
+            except ValueError:
+                continue
+        return None
+
+    @staticmethod
+    def _is_earlier_date(candidate: Optional[date], current: Optional[date]) -> bool:
+        """두 날짜 중 앞선 날짜인지 확인"""
+        if candidate is None:
+            return False
+        if current is None:
+            return True
+        return candidate < current
+
+    @staticmethod
+    def _parse_int_value(value) -> Optional[int]:
+        """숫자 형태 문자열을 정수로 변환"""
+        if value in (None, ''):
+            return None
+        try:
+            return int(str(value).replace(',', '').strip())
+        except (TypeError, ValueError):
+            return None
+
+    @staticmethod
+    def _format_price(value: Optional[int]) -> str:
+        """가격 문자열 포맷"""
+        if value is None:
+            return "N/A"
+        try:
+            return f"₩{int(value):,}"
+        except (TypeError, ValueError):
+            return "N/A"
+
+    @staticmethod
+    def _format_date_label(value: Optional[date]) -> str:
+        """리포트 출력용 날짜 문자열"""
+        if not value:
+            return "-"
+        return value.strftime('%Y-%m-%d')
+
+    def _extract_price_from_product(self, product: Optional[Dict]) -> Optional[int]:
+        """상품 데이터에서 가격 정보 추출"""
+        if not product:
+            return None
+        return self._parse_int_value(product.get('가격') or product.get('salePrice'))
+
+    def _extract_discount_from_product(self, product: Optional[Dict]) -> Optional[str]:
+        """상품 데이터에서 할인율 추출"""
+        if not product:
+            return None
+        discount = product.get('discountRate') or product.get('할인율')
+        if discount in (None, ''):
+            return None
+        return str(discount)
+
+    @staticmethod
+    def _format_discount(discount: Optional[str]) -> str:
+        """할인율 표시 형식"""
+        if discount in (None, '', '-'):  # 빈 값 처리
+            return "0%"
+
+        value = str(discount).strip()
+        if value.endswith('%'):
+            value = value[:-1]
+
+        try:
+            number = float(value)
+            if number.is_integer():
+                number = int(number)
+            return f"{number}%"
+        except (TypeError, ValueError):
+            cleaned = value.replace('%', '')
+            if cleaned:
+                return f"{cleaned}%"
+            return "0%"
+
+    def _relative_path_string(self, target_path: Optional[Path], current_dir: Path) -> Optional[str]:
+        """현재 리포트 디렉터리 기준 상대 경로 계산"""
+        if not target_path:
+            return None
+
+        try:
+            relative = os.path.relpath(target_path, current_dir)
+        except ValueError:
+            return None
+
+        relative = relative.replace(os.sep, '/')
+        if not relative.startswith('.') and not relative.startswith('/'):
+            relative = f"./{relative}"
+        return relative
+
+    def _format_link(self, label: str, target_path: Optional[Path], current_dir: Path) -> str:
+        """마크다운 링크 생성"""
+        relative = self._relative_path_string(target_path, current_dir)
+        if not relative:
+            return "-"
+        return f"[{label}]({relative})"
+
+    def _resolve_daily_markdown_path(self, source_csv: Optional[str]) -> Optional[Path]:
+        """CSV 파일 경로에서 일일 리포트 마크다운 경로 추정"""
+        if not source_csv:
+            return None
+
+        csv_path = Path(source_csv)
+        if not csv_path.is_absolute():
+            csv_path = self.output_dir / csv_path
+
+        md_name = csv_path.name.replace('wconcept_best_', '일일_요약_').replace('.csv', '.md')
+        return csv_path.parent / md_name
+
+    def _resolve_weekly_markdown_path(self, year: int, month: int, week_num: int) -> Path:
+        """주간 리포트 마크다운 경로 추정"""
+        base_dir = self.output_dir / str(year) / f"{month:02d}"
+        filename = f"{year}년_{month:02d}월_{week_num}주차_통계.md"
+        return base_dir / filename
+
+    def _price_display_from_entry(self, entry: Dict) -> str:
+        """집계된 상품 정보에서 표시용 가격 문자열 산출"""
+        price_str = self._format_price(entry.get('price'))
+        if price_str != "N/A":
+            return price_str
+
+        best_record = entry.get('best_record') or {}
+        raw_price = best_record.get('가격') or best_record.get('salePrice')
+        parsed_price = self._parse_int_value(raw_price)
+        if parsed_price is not None:
+            return self._format_price(parsed_price)
+        return raw_price if raw_price else "N/A"
+
+    def _price_value_from_entry(self, entry: Dict) -> str:
+        """CSV용 숫자 가격 값 산출"""
+        price_value = entry.get('price')
+        if price_value is not None:
+            return str(price_value)
+
+        best_record = entry.get('best_record') or {}
+        raw_price = best_record.get('가격') or best_record.get('salePrice')
+        parsed_price = self._parse_int_value(raw_price)
+        if parsed_price is not None:
+            return str(parsed_price)
+        return raw_price or ''
+
+    def _aggregate_product_performance(self, products: List[Dict]) -> Dict[str, Dict]:
+        """상품별 최고 순위 및 기록일 집계"""
+        aggregated: Dict[str, Dict] = {}
+
+        for product in products:
+            key = self._get_product_key(product)
+            if not key:
+                continue
+
+            rank_raw = product.get('순위') or product.get('rank')
+            try:
+                rank = int(str(rank_raw).strip())
+            except (TypeError, ValueError):
+                continue
+
+            record_date = self._parse_date(product.get('날짜') or product.get('date'))
+
+            entry = aggregated.get(key)
+
+            if entry is None:
+                entry = {
+                    'name': product.get('상품명') or product.get('productName', 'N/A'),
+                    'url': product.get('상품URL') or product.get('productUrl', ''),
+                    'category_depth1': product.get('depth1_카테고리') or product.get('depth1_name', ''),
+                    'category_depth2': product.get('depth2_카테고리') or product.get('depth2_name', ''),
+                    'price': self._extract_price_from_product(product),
+                    'discount': self._extract_discount_from_product(product),
+                    'best_rank': rank,
+                    'best_rank_date': record_date,
+                    'best_record': product,
+                    'best_source_csv': product.get('__source_csv__'),
+                    'records': []
+                }
+                aggregated[key] = entry
+
+            entry['records'].append({
+                'rank': rank,
+                'date': record_date,
+                'source_csv': product.get('__source_csv__'),
+                'discount': self._extract_discount_from_product(product),
+                'price': self._extract_price_from_product(product),
+                'product': product
+            })
+
+            best_rank = entry['best_rank']
+            best_date = entry['best_rank_date']
+
+            if rank < best_rank or (rank == best_rank and self._is_earlier_date(record_date, best_date)):
+                entry['name'] = product.get('상품명') or product.get('productName', 'N/A')
+                entry['url'] = product.get('상품URL') or product.get('productUrl', '')
+                entry['category_depth1'] = product.get('depth1_카테고리') or product.get('depth1_name', '')
+                entry['category_depth2'] = product.get('depth2_카테고리') or product.get('depth2_name', '')
+                entry['price'] = self._extract_price_from_product(product)
+                entry['discount'] = self._extract_discount_from_product(product) or entry.get('discount')
+                entry['best_rank'] = rank
+                entry['best_rank_date'] = record_date
+                entry['best_record'] = product
+                entry['best_source_csv'] = product.get('__source_csv__')
+
+        return aggregated
+
     def find_csv_files(self, start_date: datetime, end_date: datetime) -> List[Path]:
         """날짜 범위 내의 CSV 파일 찾기 (각 날짜별 최신 파일만)"""
         csv_files = []
@@ -52,22 +277,29 @@ class HacieReportGenerator:
     def parse_csv(self, csv_file: Path) -> List[Dict]:
         """CSV 파일 파싱"""
         products = []
+        try:
+            source_csv_path = str(csv_file.relative_to(self.output_dir))
+        except ValueError:
+            source_csv_path = str(csv_file)
         
         try:
             with open(csv_file, 'r', encoding='utf-8') as f:
                 reader = csv.DictReader(f)
                 for row in reader:
+                    row_data = dict(row)
+                    row_data['__source_csv__'] = source_csv_path
+                    
                     # 브랜드명 필드
-                    brand_name = row.get('브랜드명') or row.get('brandName') or ''
+                    brand_name = row_data.get('브랜드명') or row_data.get('brandName') or ''
                     
                     # HACIE 브랜드 필터링
                     if brand_name and ('HACIE' in brand_name.upper() or '하시에' in brand_name):
-                        products.append(row)
+                        products.append(row_data)
                     else:
                         # 브랜드 필드 없으면 상품명에서 확인
-                        product_name = row.get('상품명') or row.get('productName') or ''
+                        product_name = row_data.get('상품명') or row_data.get('productName') or ''
                         if product_name and ('HACIE' in product_name.upper() or '하시에' in product_name):
-                            products.append(row)
+                            products.append(row_data)
         except Exception as e:
             print(f"CSV 파싱 에러 ({csv_file}): {e}")
         
@@ -134,8 +366,17 @@ class HacieReportGenerator:
             except:
                 pass
         
+        # 상품별 최고 순위 집계
+        product_performance = self._aggregate_product_performance(all_products)
+
+        # 리포트 저장 디렉터리
+        report_dir = self.output_dir / str(year) / f"{month:02d}"
+
         # 베스트 순위 상품
-        top_products = sorted(all_products, key=lambda x: int(x.get('순위') or x.get('rank', 999)))[:10]
+        top_products = sorted(
+            product_performance.values(),
+            key=lambda x: (x['best_rank'], x['best_rank_date'] or date.max)
+        )[:10]
         
         # 리포트 생성
         report = f"""# 📊 HACIE 브랜드 주간 통계 리포트
@@ -175,31 +416,30 @@ class HacieReportGenerator:
         report += f"""
 ## 🌟 주간 베스트 TOP 10
 
-| 순위 | 상품명 | 카테고리 | 평균가 |
-|:----:|--------|---------|-------:|
+| 순위 | 최고 순위 | 달성일 | 상품명 | 카테고리 | 가격 | 할인율 | 링크 |
+|:----:|---------:|:------:|--------|---------|-----:|------:|:----:|
 """
-        
-        for idx, product in enumerate(top_products[:10], 1):
-            # CSV 필드명 매핑
-            name = product.get('상품명') or product.get('productName', 'N/A')
-            url = product.get('상품URL') or product.get('productUrl', '')
-            category = product.get('depth2_카테고리') or product.get('depth2_name', 'N/A')
-            
-            # 상품명 길이 제한 및 링크 추가
+
+        for idx, product in enumerate(top_products, 1):
+            name = product.get('name', 'N/A')
+            url = product.get('url', '')
+            category = product.get('category_depth2') or product.get('category_depth1') or 'N/A'
+
             if len(name) > 40:
                 name = name[:40] + '...'
             if url and url.startswith('http'):
                 name = f"[{name}]({url})"
-            
-            # 가격 포맷팅
-            try:
-                price_val = product.get('가격') or product.get('salePrice', 0)
-                price = int(price_val) if price_val else 0
-                price_str = f"₩{price:,}"
-            except:
-                price_str = "N/A"
-            
-            report += f"| {idx} | {name} | {category} | {price_str} |\n"
+
+            price_str = self._price_display_from_entry(product)
+            best_rank = product.get('best_rank')
+            best_rank_text = f"{best_rank}위" if best_rank is not None else "-"
+            best_date_text = self._format_date_label(product.get('best_rank_date'))
+            discount_value = product.get('discount') or (product.get('best_record') or {}).get('discountRate')
+            discount_text = self._format_discount(discount_value)
+            daily_md_path = self._resolve_daily_markdown_path(product.get('best_source_csv'))
+            link_markdown = self._format_link('일일 리포트', daily_md_path, report_dir)
+
+            report += f"| {idx} | {best_rank_text} | {best_date_text} | {name} | {category} | {price_str} | {discount_text} | {link_markdown} |\n"
         
         report += f"""
 ## 💡 주간 인사이트
@@ -276,27 +516,35 @@ class HacieReportGenerator:
             })
         
         # 3. TOP 상품
-        for idx, product in enumerate(top_products[:10], 1):
-            # CSV 필드명 매핑
-            depth2 = product.get('depth2_카테고리') or product.get('depth2_name', 'N/A')
-            rank = product.get('순위') or product.get('rank', '')
-            name = product.get('상품명') or product.get('productName', 'N/A')
-            
+        for idx, product in enumerate(top_products, 1):
+            depth1 = product.get('category_depth1') or ''
+            depth2 = product.get('category_depth2') or ''
+            category = depth2 or depth1 or 'N/A'
+            best_rank = product.get('best_rank')
+            best_date_text = self._format_date_label(product.get('best_rank_date'))
+            discount_value = product.get('discount') or (product.get('best_record') or {}).get('discountRate')
+            daily_md_path = self._resolve_daily_markdown_path(product.get('best_source_csv'))
+            link_path = self._relative_path_string(daily_md_path, report_dir) or ''
+
             csv_data.append({
                 '유형': f'TOP{idx}',
                 '날짜': '',
                 '상품수': '',
-                '카테고리': depth2,
-                '평균순위': rank,
-                '최고순위': '',
-                '상품명': name
+                '카테고리': category,
+                '평균순위': '',
+                '최고순위': str(best_rank) if best_rank is not None else '',
+                '기록일': best_date_text,
+                '가격': self._price_value_from_entry(product),
+                '할인율': self._format_discount(discount_value),
+                '상품명': product.get('name', 'N/A'),
+                '링크': link_path
             })
         
         # CSV 문자열 생성
         if csv_data:
             import io
             output = io.StringIO()
-            writer = csv.DictWriter(output, fieldnames=['유형', '날짜', '상품수', '카테고리', '평균순위', '최고순위', '상품명'])
+            writer = csv.DictWriter(output, fieldnames=['유형', '날짜', '상품수', '카테고리', '평균순위', '최고순위', '기록일', '가격', '할인율', '상품명', '링크'])
             writer.writeheader()
             writer.writerows(csv_data)
             csv_content = output.getvalue()
@@ -506,8 +754,46 @@ class HacieReportGenerator:
             except:
                 pass
         
+        # 상품별 최고 순위 집계
+        product_performance = self._aggregate_product_performance(all_products)
+
         # 월간 베스트 상품
-        top_products = sorted(all_products, key=lambda x: int(x.get('순위') or x.get('rank', 999)))[:20]
+        top_products = sorted(
+            product_performance.values(),
+            key=lambda x: (x['best_rank'], x['best_rank_date'] or date.max)
+        )[:20]
+
+        # 주별 베스트 상품 후보
+        weekly_product_best = defaultdict(list)
+        for entry in product_performance.values():
+            weekly_candidates: Dict[int, Dict] = {}
+            for record in entry.get('records', []):
+                record_date = record.get('date')
+                if not record_date or record_date.year != year or record_date.month != month:
+                    continue
+
+                week_index = (record_date.day - 1) // 7 + 1
+                current = weekly_candidates.get(week_index)
+                if current is None or record['rank'] < current['rank'] or (
+                    record['rank'] == current['rank'] and self._is_earlier_date(record_date, current['date'])
+                ):
+                    weekly_candidates[week_index] = record
+
+            for week_index, record in weekly_candidates.items():
+                product_snapshot = record.get('product') or entry.get('best_record')
+                weekly_entry = {
+                    'name': entry.get('name', 'N/A'),
+                    'url': entry.get('url', ''),
+                    'category_depth1': entry.get('category_depth1'),
+                    'category_depth2': entry.get('category_depth2'),
+                    'price': record.get('price') if record.get('price') is not None else entry.get('price'),
+                    'discount': record.get('discount') or entry.get('discount'),
+                    'best_rank': record.get('rank'),
+                    'best_rank_date': record.get('date'),
+                    'best_record': product_snapshot,
+                    'best_source_csv': record.get('source_csv') or entry.get('best_source_csv')
+                }
+                weekly_product_best[week_index].append(weekly_entry)
         
         # 리포트 생성
         month_name = f"{year}년 {month}월"
@@ -577,39 +863,87 @@ class HacieReportGenerator:
             
             report += f"| {idx} | {cat_name} | {count}회 | {avg_rank:.1f}위 | ₩{int(avg_price):,} |\n"
         
+        report_dir = self.output_dir / str(year) / f"{month:02d}"
+
         report += f"""
 ## 🌟 월간 베스트 TOP 20
 
-| 순위 | 상품명 | 카테고리 | 가격 | 할인율 |
-|:----:|--------|---------|-----:|------:|
+| 순위 | 최고 순위 | 달성일 | 상품명 | 카테고리 | 가격 | 할인율 | 링크 |
+|:----:|---------:|:------:|--------|---------|-----:|------:|:----:|
 """
-        
-        for idx, product in enumerate(top_products[:20], 1):
-            # CSV 필드명 매핑
-            name = product.get('상품명') or product.get('productName', 'N/A')
-            url = product.get('상품URL') or product.get('productUrl', '')
-            depth1 = product.get('depth1_카테고리') or product.get('depth1_name', '')
-            depth2 = product.get('depth2_카테고리') or product.get('depth2_name', '')
-            category = f"{depth1} > {depth2}"[:25]
-            
-            # 상품명 길이 제한 및 링크 추가
+
+        for idx, product in enumerate(top_products, 1):
+            name = product.get('name', 'N/A')
+            url = product.get('url', '')
+            depth1 = product.get('category_depth1') or ''
+            depth2 = product.get('category_depth2') or ''
+            category = " > ".join(filter(None, [depth1, depth2]))
+            category = category if category else 'N/A'
+            if len(category) > 25:
+                category = category[:25] + '...'
+
             if len(name) > 40:
                 name = name[:40] + '...'
             if url and url.startswith('http'):
                 name = f"[{name}]({url})"
-            
-            # 가격 포맷팅
-            try:
-                price_val = product.get('가격') or product.get('salePrice', 0)
-                price = int(price_val) if price_val else 0
-                price_str = f"₩{price:,}"
-            except:
-                price_str = "N/A"
-            
-            discount = product.get('discountRate', '0')
-            
-            report += f"| {idx} | {name} | {category} | {price_str} | {discount}% |\n"
+
+            price_str = self._price_display_from_entry(product)
+            best_rank = product.get('best_rank')
+            best_rank_text = f"{best_rank}위" if best_rank is not None else "-"
+            best_date_text = self._format_date_label(product.get('best_rank_date'))
+            discount_value = product.get('discount') or (product.get('best_record') or {}).get('discountRate')
+            discount_text = self._format_discount(discount_value)
+            daily_md_path = self._resolve_daily_markdown_path(product.get('best_source_csv'))
+            link_markdown = self._format_link('일일 리포트', daily_md_path, report_dir)
+
+            report += f"| {idx} | {best_rank_text} | {best_date_text} | {name} | {category} | {price_str} | {discount_text} | {link_markdown} |\n"
         
+        if weekly_product_best:
+            report += """
+## 🗓️ 주별 베스트 TOP 5
+"""
+
+            for week_index in sorted(weekly_product_best.keys()):
+                week_products = sorted(
+                    weekly_product_best[week_index],
+                    key=lambda x: (x['best_rank'], x['best_rank_date'] or date.max)
+                )[:5]
+
+                if not week_products:
+                    continue
+
+                weekly_md_path = self._resolve_weekly_markdown_path(year, month, week_index)
+                weekly_link = self._format_link('주간 리포트', weekly_md_path, report_dir)
+
+                report += f"""
+### {week_index}주차 베스트 5
+
+| 순위 | 최고 순위 | 달성일 | 상품명 | 카테고리 | 가격 | 할인율 | 링크 |
+|:----:|---------:|:------:|--------|---------|-----:|------:|:----:|
+"""
+
+                for idx, week_product in enumerate(week_products, 1):
+                    name = week_product.get('name', 'N/A')
+                    url = week_product.get('url', '')
+                    depth1 = week_product.get('category_depth1') or ''
+                    depth2 = week_product.get('category_depth2') or ''
+                    category = " > ".join(filter(None, [depth1, depth2])) or 'N/A'
+                    if len(category) > 25:
+                        category = category[:25] + '...'
+
+                    if len(name) > 40:
+                        name = name[:40] + '...'
+                    if url and url.startswith('http'):
+                        name = f"[{name}]({url})"
+
+                    best_rank = week_product.get('best_rank')
+                    best_rank_text = f"{best_rank}위" if best_rank is not None else "-"
+                    best_date_text = self._format_date_label(week_product.get('best_rank_date'))
+                    price_str = self._price_display_from_entry(week_product)
+                    discount_text = self._format_discount(week_product.get('discount'))
+
+                    report += f"| {idx} | {best_rank_text} | {best_date_text} | {name} | {category} | {price_str} | {discount_text} | {weekly_link} |\n"
+
         report += f"""
 ## 💡 월간 인사이트
 
@@ -714,8 +1048,13 @@ class HacieReportGenerator:
                 '일평균': f"{avg:.1f}",
                 '카테고리': '',
                 '평균순위': '',
-                '평균가격': '',
-                '상품명': ''
+                  '평균가격': '',
+                  '최고순위': '',
+                  '기록일': '',
+                  '가격': '',
+                  '할인율': '',
+                  '상품명': '',
+                  '링크': ''
             })
         
         # 2. 카테고리별 통계
@@ -734,25 +1073,27 @@ class HacieReportGenerator:
                 '일평균': '',
                 '카테고리': cat_name,
                 '평균순위': f"{avg_rank:.1f}",
-                '평균가격': f"{int(avg_price):,}",
-                '상품명': ''
+                  '평균가격': f"{int(avg_price):,}",
+                  '최고순위': '',
+                  '기록일': '',
+                  '가격': '',
+                  '할인율': '',
+                  '상품명': '',
+                  '링크': ''
             })
         
         # 3. TOP 상품
-        for idx, product in enumerate(top_products[:20], 1):
-            # CSV 필드명 매핑
-            name = product.get('상품명') or product.get('productName', 'N/A')
-            depth1 = product.get('depth1_카테고리') or product.get('depth1_name', '')
-            depth2 = product.get('depth2_카테고리') or product.get('depth2_name', '')
-            category = f"{depth1} > {depth2}"
-            rank = product.get('순위') or product.get('rank', '')
-            
-            try:
-                price_val = product.get('가격') or product.get('salePrice', 0)
-                price = int(price_val) if price_val else 0
-                price_str = str(price)
-            except:
-                price_str = "0"
+        for idx, product in enumerate(top_products, 1):
+            name = product.get('name', 'N/A')
+            depth1 = product.get('category_depth1') or ''
+            depth2 = product.get('category_depth2') or ''
+            category = " > ".join(filter(None, [depth1, depth2])) or 'N/A'
+            best_rank = product.get('best_rank')
+            best_date_text = self._format_date_label(product.get('best_rank_date'))
+            price_value = self._price_value_from_entry(product)
+            discount_value = product.get('discount') or (product.get('best_record') or {}).get('discountRate')
+            daily_md_path = self._resolve_daily_markdown_path(product.get('best_source_csv'))
+            link_path = self._relative_path_string(daily_md_path, report_dir) or ''
             
             csv_data.append({
                 '유형': f'TOP{idx}',
@@ -760,16 +1101,54 @@ class HacieReportGenerator:
                 '상품수': '',
                 '일평균': '',
                 '카테고리': category,
-                '평균순위': rank,
-                '평균가격': price_str,
-                '상품명': name
+                '평균순위': '',
+                '평균가격': '',
+                '최고순위': str(best_rank) if best_rank is not None else '',
+                '기록일': best_date_text,
+                '가격': price_value,
+                '할인율': self._format_discount(discount_value),
+                '상품명': name,
+                '링크': link_path
             })
+
+        # 4. 주별 베스트 TOP5
+        for week_index in sorted(weekly_product_best.keys()):
+            week_products = sorted(
+                weekly_product_best[week_index],
+                key=lambda x: (x['best_rank'], x['best_rank_date'] or date.max)
+            )[:5]
+
+            weekly_md_path = self._resolve_weekly_markdown_path(year, month, week_index)
+            weekly_link_path = self._relative_path_string(weekly_md_path, report_dir) or ''
+
+            for idx, week_product in enumerate(week_products, 1):
+                depth1 = week_product.get('category_depth1') or ''
+                depth2 = week_product.get('category_depth2') or ''
+                category = " > ".join(filter(None, [depth1, depth2])) or 'N/A'
+                best_rank = week_product.get('best_rank')
+                best_date_text = self._format_date_label(week_product.get('best_rank_date'))
+
+                csv_data.append({
+                    '유형': f'{week_index}주차_TOP{idx}',
+                    '기간': f'{week_index}주차',
+                    '상품수': '',
+                    '일평균': '',
+                    '카테고리': category,
+                    '평균순위': '',
+                    '평균가격': '',
+                    '최고순위': str(best_rank) if best_rank is not None else '',
+                    '기록일': best_date_text,
+                    '가격': self._price_value_from_entry(week_product),
+                    '할인율': self._format_discount(week_product.get('discount')),
+                    '상품명': week_product.get('name', 'N/A'),
+                    '링크': weekly_link_path
+                })
         
         # CSV 문자열 생성
         if csv_data:
             import io
             output = io.StringIO()
-            writer = csv.DictWriter(output, fieldnames=['유형', '기간', '상품수', '일평균', '카테고리', '평균순위', '평균가격', '상품명'])
+            writer = csv.DictWriter(output, fieldnames=['유형', '기간', '상품수', '일평균', '카테고리', '평균순위', '평균가격', '최고순위', '기록일', '가격', '할인율', '상품명', '링크'])
             writer.writeheader()
             writer.writerows(csv_data)
             csv_content = output.getvalue()
