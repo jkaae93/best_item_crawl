@@ -393,6 +393,30 @@ def pick_price(product: Dict[str, Any]) -> Optional[int]:
     return None
 
 
+def pick_discount(product: Dict[str, Any]) -> Optional[str]:
+    """할인율 추출"""
+    for key in ("discountRate", "discount", "saleRate", "sale_rate", "discountPercent"):
+        if key in product:
+            value = product[key]
+            if value is None or value == "" or value == 0:
+                continue
+            try:
+                # 숫자로 변환 가능한 경우
+                if isinstance(value, (int, float)):
+                    if value > 0:
+                        return f"{int(value)}%" if float(value).is_integer() else f"{value}%"
+                elif isinstance(value, str):
+                    # 문자열인 경우 % 기호 제거 후 숫자 확인
+                    clean_value = value.strip().replace("%", "")
+                    if clean_value and clean_value != "0":
+                        num_value = float(clean_value)
+                        if num_value > 0:
+                            return f"{int(num_value)}%" if num_value.is_integer() else f"{num_value}%"
+            except Exception:
+                continue
+    return None
+
+
 def pick_name(product: Dict[str, Any]) -> str:
     for key in ("itemName", "productName", "name", "goodsName", "title"):
         if key in product and product[key]:
@@ -602,7 +626,7 @@ def write_csv(rows: List[List[Any]], output_dir: Path, timestamp: datetime) -> T
     filename = f"wconcept_best_{time_suffix}.csv"
     out_path = date_dir / filename
     
-    headers = ["날짜", "시간", "브랜드명", "depth1_카테고리", "depth2_카테고리", "순위", "상품명", "가격", "상품URL"]
+    headers = ["날짜", "시간", "브랜드명", "depth1_카테고리", "depth2_카테고리", "순위", "상품명", "가격", "할인율", "상품URL"]
     with out_path.open("w", newline="", encoding="utf-8") as f:
         writer = csv.writer(f)
         writer.writerow(headers)
@@ -732,6 +756,7 @@ def main():
             brand = pick_brand(p)
             name = pick_name(p)
             price = pick_price(p)
+            discount = pick_discount(p)
             url = pick_url(p)
             rows.append(
                 [
@@ -743,6 +768,7 @@ def main():
                     rank,
                     name,
                     price if price is not None else "",
+                    discount if discount is not None else "",
                     url,
                 ]
             )

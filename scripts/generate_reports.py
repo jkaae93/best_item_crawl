@@ -396,7 +396,8 @@ class HacieReportGenerator:
 """
         
         for date_str, count in sorted(daily_stats.items()):
-            date_obj = datetime.strptime(date_str, '%d')
+            day = int(date_str)
+            date_obj = datetime(year, month, day)
             report += f"| {date_obj.strftime('%m월 %d일')} | {count}개 |\n"
         
         report += f"""
