@@ -307,21 +307,11 @@ class HacieReportGenerator:
     
     def generate_weekly_report(self, year: int, month: int, week_num: int) -> Optional[Dict[str, str]]:
         """주간 리포트 생성"""
-        # 해당 주의 날짜 범위 계산
-        # 월요일 기준
+        # 해당 주의 날짜 범위 계산 (월요일 시작)
         first_day = datetime(year, month, 1)
-        
-        # 해당 월의 N주차 계산
-        start_date = first_day + timedelta(weeks=week_num - 1)
+        first_week_start = first_day - timedelta(days=first_day.weekday())
+        start_date = first_week_start + timedelta(weeks=week_num - 1)
         end_date = start_date + timedelta(days=6)
-        
-        # 실제 월 범위 체크
-        if start_date.month != month:
-            start_date = first_day
-        if end_date.month != month:
-            # 월말까지
-            next_month = datetime(year, month + 1, 1) if month < 12 else datetime(year + 1, 1, 1)
-            end_date = next_month - timedelta(days=1)
         
         csv_files = self.find_csv_files(start_date, end_date)
         
