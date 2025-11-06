@@ -419,12 +419,8 @@ def _coerce_to_float(value: Any) -> Optional[float]:
 
 
 def _format_percentage_value(value: float) -> str:
-    rounded = round(value, 1)
-    if math.isclose(rounded, round(rounded), abs_tol=1e-6):
-        formatted = str(int(round(rounded)))
-    else:
-        formatted = f"{rounded:.1f}".rstrip("0").rstrip(".")
-    return f"{formatted}%"
+    rounded = round(value)
+    return f"{int(rounded)}%"
 
 
 def _normalize_percentage_candidate(value: Any) -> Optional[str]:
