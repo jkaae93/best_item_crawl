@@ -6,6 +6,7 @@ HACIE 브랜드 주간/월간 통계 리포트 생성
 import json
 import csv
 import os
+import re
 from pathlib import Path
 from datetime import datetime, timedelta, date
 from typing import List, Dict, Optional
@@ -89,14 +90,73 @@ class HacieReportGenerator:
             return None
         return self._parse_int_value(product.get('가격') or product.get('salePrice'))
 
+    @staticmethod
+    def _parse_discount_value(value) -> Optional[float]:
+        """값을 퍼센트 숫자(float)로 변환"""
+        if value in (None, '', '-', 'N/A'):
+            return None
+
+        if isinstance(value, (int, float)):
+            number = float(value)
+        else:
+            text = str(value).strip()
+            if not text:
+                return None
+
+            cleaned = re.sub(r"[^0-9.\-]", "", text)
+            if not cleaned or cleaned in ('-', '.', '-.'):
+                return None
+
+            try:
+                number = float(cleaned)
+            except ValueError:
+                return None
+
+        if number < 0:
+            return None
+
+        if number <= 1:
+            number *= 100
+
+        return number
+
+    @classmethod
+    def _normalize_discount_value(cls, value) -> Optional[str]:
+        """표준화된 할인율 문자열 반환"""
+        number = cls._parse_discount_value(value)
+        if number is None:
+            return None
+
+        rounded = round(number, 1)
+        if abs(rounded - round(rounded)) < 1e-6:
+            rounded = round(rounded)
+        return f"{rounded:g}%"
+
     def _extract_discount_from_product(self, product: Optional[Dict]) -> Optional[str]:
         """상품 데이터에서 할인율 추출"""
         if not product:
             return None
-        discount = product.get('discountRate') or product.get('할인율')
-        if discount in (None, ''):
-            return None
-        return str(discount)
+
+        keys = (
+            '할인율',
+            'discountRate',
+            'discount_rate',
+            'saleRate',
+            'sale_rate',
+            'discountRateText',
+            'saleRateText',
+            'discountText',
+            'discount_rate_text',
+        )
+
+        for key in keys:
+            if key not in product:
+                continue
+            normalized = self._normalize_discount_value(product.get(key))
+            if normalized:
+                return normalized
+
+        return None
 
     @staticmethod
     def _format_discount(discount: Optional[str]) -> str:
@@ -105,19 +165,35 @@ class HacieReportGenerator:
             return "0%"
 
         value = str(discount).strip()
-        if value.endswith('%'):
-            value = value[:-1]
+        normalized = HacieReportGenerator._normalize_discount_value(value)
+        if normalized:
+            return normalized
 
-        try:
-            number = float(value)
-            if number.is_integer():
-                number = int(number)
-            return f"{number}%"
-        except (TypeError, ValueError):
-            cleaned = value.replace('%', '')
-            if cleaned:
-                return f"{cleaned}%"
-            return "0%"
+        cleaned = value.replace('%', '')
+        if cleaned:
+            return f"{cleaned}%"
+        return "0%"
+
+    def _resolve_entry_discount(self, entry: Dict) -> Optional[str]:
+        """집계 엔트리에서 표시용 할인율 추출"""
+        candidates = [entry.get('discount')]
+
+        best_record = entry.get('best_record') or {}
+        candidates.extend([
+            best_record.get('할인율'),
+            best_record.get('discountRate'),
+            best_record.get('discount_rate'),
+        ])
+
+        for record in entry.get('records', []):
+            candidates.append(record.get('discount'))
+
+        for candidate in candidates:
+            normalized = self._normalize_discount_value(candidate)
+            if normalized:
+                return normalized
+
+        return None
 
     @staticmethod
     def _compose_category(depth1: Optional[str], depth2: Optional[str], separator: str = " - ") -> str:
@@ -451,7 +527,7 @@ class HacieReportGenerator:
             best_rank = product.get('best_rank')
             best_rank_text = f"{best_rank}위" if best_rank is not None else "-"
             best_date_text = self._format_date_label(product.get('best_rank_date'))
-            discount_value = product.get('discount') or (product.get('best_record') or {}).get('discountRate')
+            discount_value = self._resolve_entry_discount(product)
             discount_text = self._format_discount(discount_value)
             daily_md_path = self._resolve_daily_markdown_path(product.get('best_source_csv'))
             link_markdown = self._format_link('일일 리포트', daily_md_path, report_dir)
@@ -541,7 +617,7 @@ class HacieReportGenerator:
             category = self._compose_category(depth1, depth2)
             best_rank = product.get('best_rank')
             best_date_text = self._format_date_label(product.get('best_rank_date'))
-            discount_value = product.get('discount') or (product.get('best_record') or {}).get('discountRate')
+            discount_value = self._resolve_entry_discount(product)
             daily_md_path = self._resolve_daily_markdown_path(product.get('best_source_csv'))
             link_path = self._relative_path_string(daily_md_path, report_dir) or ''
 
@@ -911,7 +987,7 @@ class HacieReportGenerator:
             best_rank = product.get('best_rank')
             best_rank_text = f"{best_rank}위" if best_rank is not None else "-"
             best_date_text = self._format_date_label(product.get('best_rank_date'))
-            discount_value = product.get('discount') or (product.get('best_record') or {}).get('discountRate')
+            discount_value = self._resolve_entry_discount(product)
             discount_text = self._format_discount(discount_value)
             daily_md_path = self._resolve_daily_markdown_path(product.get('best_source_csv'))
             link_markdown = self._format_link('일일 리포트', daily_md_path, report_dir)
@@ -960,7 +1036,7 @@ class HacieReportGenerator:
                     best_rank_text = f"{best_rank}위" if best_rank is not None else "-"
                     best_date_text = self._format_date_label(week_product.get('best_rank_date'))
                     price_str = self._price_display_from_entry(week_product)
-                    discount_text = self._format_discount(week_product.get('discount'))
+                    discount_text = self._format_discount(self._resolve_entry_discount(week_product))
 
                     report += f"| {idx} | {best_rank_text} | {best_date_text} | {name} | {category} | {price_str} | {discount_text} | {weekly_link} |\n"
 
@@ -1113,7 +1189,7 @@ class HacieReportGenerator:
             best_rank = product.get('best_rank')
             best_date_text = self._format_date_label(product.get('best_rank_date'))
             price_value = self._price_value_from_entry(product)
-            discount_value = product.get('discount') or (product.get('best_record') or {}).get('discountRate')
+            discount_value = self._resolve_entry_discount(product)
             daily_md_path = self._resolve_daily_markdown_path(product.get('best_source_csv'))
             link_path = self._relative_path_string(daily_md_path, report_dir) or ''
             
@@ -1161,7 +1237,7 @@ class HacieReportGenerator:
                     '최고순위': str(best_rank) if best_rank is not None else '',
                     '기록일': best_date_text,
                     '가격': self._price_value_from_entry(week_product),
-                    '할인율': self._format_discount(week_product.get('discount')),
+                    '할인율': self._format_discount(self._resolve_entry_discount(week_product)),
                     '상품명': week_product.get('name', 'N/A'),
                     '링크': weekly_link_path
                 })
