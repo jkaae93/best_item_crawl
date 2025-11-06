@@ -5,6 +5,16 @@ on:
     # 매주 월요일 오전 8시 (KST = UTC 23시, 일요일)
     - cron: '0 23 * * 0'
   workflow_dispatch:  # 수동 실행 가능
+    inputs:
+      target_year:
+        description: '대상 연도 (예: 2025)'
+        required: false
+      target_month:
+        description: '대상 월 (예: 10)'
+        required: false
+      target_week:
+        description: '대상 주차 (예: 5)'
+        required: false
 
 permissions:
   contents: write
@@ -12,37 +22,57 @@ permissions:
 jobs:
   weekly-report:
     runs-on: ubuntu-latest
-    
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
           fetch-depth: 0  # 전체 히스토리 가져오기
-      
+
+      - name: Determine target week
+        id: calc
+        env:
+          TZ: Asia/Seoul
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && \
+             [ -n "${{ github.event.inputs.target_year }}" ] && \
+             [ -n "${{ github.event.inputs.target_month }}" ] && \
+             [ -n "${{ github.event.inputs.target_week }}" ]; then
+            year="${{ github.event.inputs.target_year }}"
+            month_input="${{ github.event.inputs.target_month }}"
+            week_input="${{ github.event.inputs.target_week }}"
+          else
+            year=$(date '+%Y')
+            month_input=$(date '+%m')
+            day=$(date '+%d')
+            week_input=$(( (10#$day - 1) / 7 + 1 ))
+          fi
+
+          month_num=$((10#$month_input))
+          month=$(printf '%02d' "${month_num}")
+          week_num=$((10#$week_input))
+
+          echo "year=${year}" >> $GITHUB_OUTPUT
+          echo "month=${month}" >> $GITHUB_OUTPUT
+          echo "month_num=${month_num}" >> $GITHUB_OUTPUT
+          echo "week_num=${week_num}" >> $GITHUB_OUTPUT
+          echo "대상 기간: ${year}년 ${month}월 ${week_num}주차"
+
       - name: Generate weekly report
         id: generate
         env:
           TZ: Asia/Seoul
         run: |
-          # KST 기준 오늘 날짜 (월요일)
-          year=$(date '+%Y')
-          month=$(date '+%m')
-          day=$(date '+%d')
-          
-          # 주차 계산 (해당 월의 몇 번째 주인지)
-          week_num=$(( ($(TZ=Asia/Seoul date '+%d') - 1) / 7 + 1 ))
-          
-          echo "year=${year}" >> $GITHUB_OUTPUT
-          echo "month=${month}" >> $GITHUB_OUTPUT
-          echo "week_num=${week_num}" >> $GITHUB_OUTPUT
-          
-          # 리포트 생성
+          year="${{ steps.calc.outputs.year }}"
+          month="${{ steps.calc.outputs.month }}"
+          month_num="${{ steps.calc.outputs.month_num }}"
+          week_num="${{ steps.calc.outputs.week_num }}"
+
           export PYTHONPATH="${PYTHONPATH}:${GITHUB_WORKSPACE}"
-          python3 scripts/generate_reports.py weekly ${year} ${month#0} ${week_num}
-          
-          # 생성된 파일 확인
+          python3 scripts/generate_reports.py weekly ${year} ${month_num} ${week_num}
+
           report_file="output/${year}/${month}/${year}년_${month}월_${week_num}주차_통계.md"
-          
+
           if [ -f "$report_file" ]; then
             echo "report_exists=true" >> $GITHUB_OUTPUT
             echo "report_file=${report_file}" >> $GITHUB_OUTPUT
@@ -51,21 +81,21 @@ jobs:
             echo "report_exists=false" >> $GITHUB_OUTPUT
             echo "⚠️ 주간 리포트 생성 실패 (데이터 부족 가능성)"
           fi
-      
+
       - name: Display report summary
         if: steps.generate.outputs.report_exists == 'true'
         env:
           TZ: Asia/Seoul
         run: |
           report_file="${{ steps.generate.outputs.report_file }}"
-          
+
           echo "=== 주간 리포트 요약 ==="
           if [ -f "$report_file" ]; then
             head -30 "$report_file"
           else
             echo "⚠️ 리포트 파일이 없습니다: $report_file"
           fi
-      
+
       - name: Commit and push weekly report
         if: steps.generate.outputs.report_exists == 'true'
         env:
@@ -73,32 +103,30 @@ jobs:
         run: |
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
           git config --global user.name "github-actions[bot]"
-          
-          year="${{ steps.generate.outputs.year }}"
-          month="${{ steps.generate.outputs.month }}"
-          week_num="${{ steps.generate.outputs.week_num }}"
-          
-          # 원격 변경사항 가져오기
+
+          year="${{ steps.calc.outputs.year }}"
+          month="${{ steps.calc.outputs.month }}"
+          week_num="${{ steps.calc.outputs.week_num }}"
+
           git fetch origin master
           git rebase origin/master || git merge origin/master -m "Merge remote changes"
-          
+
           git add output/${year}/${month}/*주차_통계.md
           git add output/${year}/${month}/*주차_통계.csv
-          
+
           if git diff --staged --quiet; then
             echo "변경사항이 없습니다."
           else
             kst_date=$(date '+%Y년 %m월 %d일')
-            
+
             commit_msg="📊 주간 리포트 생성: ${year}년 ${month}월 ${week_num}주차
 
             - 분석 기간: 지난 주 월요일 ~ 일요일
             - 생성 일시: ${kst_date}
             - 자동 생성: GitHub Actions (Weekly Report)"
-                        
+
             git commit -m "$commit_msg"
-            
-            # Push 재시도
+
             for i in {1..3}; do
               if git push origin master; then
                 echo "✓ 주간 리포트 커밋 완료"
@@ -111,23 +139,23 @@ jobs:
               fi
             done
           fi
-      
+
       - name: Create summary
         if: steps.generate.outputs.report_exists == 'true'
         env:
           TZ: Asia/Seoul
         run: |
           report_file="${{ steps.generate.outputs.report_file }}"
-          year="${{ steps.generate.outputs.year }}"
-          month="${{ steps.generate.outputs.month }}"
-          week_num="${{ steps.generate.outputs.week_num }}"
-          
+          year="${{ steps.calc.outputs.year }}"
+          month="${{ steps.calc.outputs.month }}"
+          week_num="${{ steps.calc.outputs.week_num }}"
+
           echo "# 📊 HACIE 주간 리포트 생성 완료" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "**리포트 기간:** ${year}년 ${month}월 ${week_num}주차" >> $GITHUB_STEP_SUMMARY
           echo "**생성 시간:** $(date '+%Y-%m-%d %H:%M:%S') KST" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          
+
           if [ -f "$report_file" ]; then
             echo "## 📋 리포트 미리보기" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
@@ -135,12 +163,12 @@ jobs:
             head -40 "$report_file" >> $GITHUB_STEP_SUMMARY
             echo '```' >> $GITHUB_STEP_SUMMARY
           fi
-      
+
       - name: Upload report as artifact
         if: steps.generate.outputs.report_exists == 'true'
         uses: actions/upload-artifact@v4
         with:
-          name: weekly-report-${{ steps.generate.outputs.year }}-${{ steps.generate.outputs.month }}-week${{ steps.generate.outputs.week_num }}
+          name: weekly-report-${{ steps.calc.outputs.year }}-${{ steps.calc.outputs.month }}-week${{ steps.calc.outputs.week_num }}
           path: ${{ steps.generate.outputs.report_file }}
           retention-days: 365
 

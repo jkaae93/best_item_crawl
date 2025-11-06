@@ -119,6 +119,25 @@ class HacieReportGenerator:
                 return f"{cleaned}%"
             return "0%"
 
+    @staticmethod
+    def _compose_category(depth1: Optional[str], depth2: Optional[str], separator: str = " - ") -> str:
+        """상/하위 카테고리 결합"""
+        name1 = (depth1 or '').strip()
+        name2 = (depth2 or '').strip()
+
+        if name1 and name2 and name1.lower() == name2.lower():
+            name2 = ''
+
+        parts: List[str] = []
+        if name1:
+            parts.append(name1)
+        if name2:
+            parts.append(name2)
+
+        if parts:
+            return separator.join(parts)
+        return "N/A"
+
     def _relative_path_string(self, target_path: Optional[Path], current_dir: Path) -> Optional[str]:
         """현재 리포트 디렉터리 기준 상대 경로 계산"""
         if not target_path:
@@ -307,21 +326,11 @@ class HacieReportGenerator:
     
     def generate_weekly_report(self, year: int, month: int, week_num: int) -> Optional[Dict[str, str]]:
         """주간 리포트 생성"""
-        # 해당 주의 날짜 범위 계산
-        # 월요일 기준
+        # 해당 주의 날짜 범위 계산 (월요일 시작)
         first_day = datetime(year, month, 1)
-        
-        # 해당 월의 N주차 계산
-        start_date = first_day + timedelta(weeks=week_num - 1)
+        first_week_start = first_day - timedelta(days=first_day.weekday())
+        start_date = first_week_start + timedelta(weeks=week_num - 1)
         end_date = start_date + timedelta(days=6)
-        
-        # 실제 월 범위 체크
-        if start_date.month != month:
-            start_date = first_day
-        if end_date.month != month:
-            # 월말까지
-            next_month = datetime(year, month + 1, 1) if month < 12 else datetime(year + 1, 1, 1)
-            end_date = next_month - timedelta(days=1)
         
         csv_files = self.find_csv_files(start_date, end_date)
         
@@ -336,11 +345,18 @@ class HacieReportGenerator:
         for csv_file in csv_files:
             products = self.parse_csv(csv_file)
             all_products.extend(products)
-            
+
             # 날짜별 통계
-            file_date = csv_file.parent.name
+            try:
+                year_dir = int(csv_file.parent.parent.parent.name)
+                month_dir = int(csv_file.parent.parent.name)
+                day_dir = int(csv_file.parent.name)
+                file_date = date(year_dir, month_dir, day_dir)
+            except (AttributeError, ValueError):
+                file_date = self._parse_date(products[0].get('날짜') if products else None) or start_date.date()
+
             daily_stats[file_date] = len(products)
-            
+
             # GitHub 링크 생성
             relative_path = csv_file.relative_to(self.output_dir)
             github_link = f"https://github.com/kaae/best_item_crawl/blob/master/output/{relative_path}"
@@ -352,13 +368,14 @@ class HacieReportGenerator:
         avg_per_day = total_products / total_days if total_days > 0 else 0
         
         # 카테고리별 집계
-        category_stats = defaultdict(lambda: {'count': 0, 'ranks': []})
+        category_stats = defaultdict(lambda: {'count': 0, 'ranks': [], 'depth': ()})
         for product in all_products:
             # CSV 필드명 매핑
-            depth1 = product.get('depth1_카테고리') or product.get('depth1_name', 'N/A')
-            depth2 = product.get('depth2_카테고리') or product.get('depth2_name', 'N/A')
-            cat_key = f"{depth1} > {depth2}"
+            depth1 = (product.get('depth1_카테고리') or product.get('depth1_name') or 'N/A').strip()
+            depth2 = (product.get('depth2_카테고리') or product.get('depth2_name') or '').strip()
+            cat_key = (depth1, depth2)
             category_stats[cat_key]['count'] += 1
+            category_stats[cat_key]['depth'] = cat_key
             try:
                 # CSV 필드명 매핑
                 rank = int(product.get('순위') or product.get('rank', 999))
@@ -395,10 +412,8 @@ class HacieReportGenerator:
 |------|------------:|
 """
         
-        for date_str, count in sorted(daily_stats.items()):
-            day = int(date_str)
-            date_obj = datetime(year, month, day)
-            report += f"| {date_obj.strftime('%m월 %d일')} | {count}개 |\n"
+        for record_date, count in sorted(daily_stats.items()):
+            report += f"| {record_date.strftime('%m월 %d일')} | {count}개 |\n"
         
         report += f"""
 ## 🏆 카테고리별 통계
@@ -407,7 +422,8 @@ class HacieReportGenerator:
 |---------|--------:|--------:|--------:|
 """
         
-        for cat_name, stats in sorted(category_stats.items(), key=lambda x: -x[1]['count'])[:10]:
+        for cat_key, stats in sorted(category_stats.items(), key=lambda x: -x[1]['count'])[:10]:
+            cat_name = self._compose_category(*(stats.get('depth') or cat_key))
             count = stats['count']
             ranks = stats['ranks']
             avg_rank = statistics.mean(ranks) if ranks else 0
@@ -424,7 +440,7 @@ class HacieReportGenerator:
         for idx, product in enumerate(top_products, 1):
             name = product.get('name', 'N/A')
             url = product.get('url', '')
-            category = product.get('category_depth2') or product.get('category_depth1') or 'N/A'
+            category = self._compose_category(product.get('category_depth1'), product.get('category_depth2'))
 
             if len(name) > 40:
                 name = name[:40] + '...'
@@ -458,8 +474,9 @@ class HacieReportGenerator:
         
         # 카테고리 인사이트
         if category_stats:
-            top_category = max(category_stats.items(), key=lambda x: x[1]['count'])
-            report += f"- 🎯 **주력 카테고리**: {top_category[0]} ({top_category[1]['count']}회 진입)\n"
+            top_category_key, top_category_stats = max(category_stats.items(), key=lambda x: x[1]['count'])
+            top_category_name = self._compose_category(*(top_category_stats.get('depth') or top_category_key))
+            report += f"- 🎯 **주력 카테고리**: {top_category_name} ({top_category_stats['count']}회 진입)\n"
         
         report += f"""
 ### 추천 액션
@@ -475,8 +492,8 @@ class HacieReportGenerator:
 |------|--------|
 """
         
-        for date, filename, link in sorted(file_links):
-            report += f"| {date}일 | [{filename}]({link}) |\n"
+        for record_date, filename, link in sorted(file_links):
+            report += f"| {record_date.strftime('%m월 %d일')} | [{filename}]({link}) |\n"
         
         report += f"""
 ---
@@ -489,10 +506,10 @@ class HacieReportGenerator:
         csv_data = []
         
         # 1. 일별 통계
-        for date_str, count in sorted(daily_stats.items()):
+        for record_date, count in sorted(daily_stats.items()):
             csv_data.append({
                 '유형': '일별통계',
-                '날짜': date_str,
+                '날짜': record_date.strftime('%Y-%m-%d'),
                 '상품수': count,
                 '카테고리': '',
                 '평균순위': '',
@@ -501,7 +518,8 @@ class HacieReportGenerator:
             })
         
         # 2. 카테고리별 통계
-        for cat_name, stats in sorted(category_stats.items(), key=lambda x: -x[1]['count']):
+        for cat_key, stats in sorted(category_stats.items(), key=lambda x: -x[1]['count']):
+            cat_name = self._compose_category(*(stats.get('depth') or cat_key))
             ranks = stats['ranks']
             avg_rank = statistics.mean(ranks) if ranks else 0
             best_rank = min(ranks) if ranks else 0
@@ -520,7 +538,7 @@ class HacieReportGenerator:
         for idx, product in enumerate(top_products, 1):
             depth1 = product.get('category_depth1') or ''
             depth2 = product.get('category_depth2') or ''
-            category = depth2 or depth1 or 'N/A'
+            category = self._compose_category(depth1, depth2)
             best_rank = product.get('best_rank')
             best_date_text = self._format_date_label(product.get('best_rank_date'))
             discount_value = product.get('discount') or (product.get('best_record') or {}).get('discountRate')
@@ -734,13 +752,14 @@ class HacieReportGenerator:
             weekly_stats[week_num]['days'] += 1
         
         # 카테고리별 집계
-        category_stats = defaultdict(lambda: {'count': 0, 'ranks': [], 'prices': []})
+        category_stats = defaultdict(lambda: {'count': 0, 'ranks': [], 'prices': [], 'depth': ()})
         for product in all_products:
             # CSV 필드명 매핑
-            depth1 = product.get('depth1_카테고리') or product.get('depth1_name', 'N/A')
-            depth2 = product.get('depth2_카테고리') or product.get('depth2_name', 'N/A')
-            cat_key = f"{depth1} > {depth2}"
+            depth1 = (product.get('depth1_카테고리') or product.get('depth1_name') or 'N/A').strip()
+            depth2 = (product.get('depth2_카테고리') or product.get('depth2_name') or '').strip()
+            cat_key = (depth1, depth2)
             category_stats[cat_key]['count'] += 1
+            category_stats[cat_key]['depth'] = cat_key
             try:
                 # CSV 필드명 매핑
                 rank = int(product.get('순위') or product.get('rank', 999))
@@ -854,7 +873,8 @@ class HacieReportGenerator:
 """
         
         sorted_categories = sorted(category_stats.items(), key=lambda x: -x[1]['count'])
-        for idx, (cat_name, stats) in enumerate(sorted_categories[:15], 1):
+        for idx, (cat_key, stats) in enumerate(sorted_categories[:15], 1):
+            cat_name = self._compose_category(*(stats.get('depth') or cat_key))
             count = stats['count']
             ranks = stats['ranks']
             prices = stats['prices']
@@ -878,8 +898,7 @@ class HacieReportGenerator:
             url = product.get('url', '')
             depth1 = product.get('category_depth1') or ''
             depth2 = product.get('category_depth2') or ''
-            category = " > ".join(filter(None, [depth1, depth2]))
-            category = category if category else 'N/A'
+            category = self._compose_category(depth1, depth2)
             if len(category) > 25:
                 category = category[:25] + '...'
 
@@ -928,7 +947,7 @@ class HacieReportGenerator:
                     url = week_product.get('url', '')
                     depth1 = week_product.get('category_depth1') or ''
                     depth2 = week_product.get('category_depth2') or ''
-                    category = " > ".join(filter(None, [depth1, depth2])) or 'N/A'
+                    category = self._compose_category(depth1, depth2)
                     if len(category) > 25:
                         category = category[:25] + '...'
 
@@ -976,7 +995,8 @@ class HacieReportGenerator:
         if category_stats:
             top_3_categories = sorted_categories[:3]
             report += "\n**강점 카테고리:**\n"
-            for cat_name, stats in top_3_categories:
+            for cat_key, stats in top_3_categories:
+                cat_name = self._compose_category(*(stats.get('depth') or cat_key))
                 avg_rank = statistics.mean(stats['ranks']) if stats['ranks'] else 0
                 report += f"- **{cat_name}**: {stats['count']}회 진입, 평균 {avg_rank:.1f}위\n"
         
@@ -1059,7 +1079,8 @@ class HacieReportGenerator:
             })
         
         # 2. 카테고리별 통계
-        for cat_name, stats in sorted_categories[:15]:
+        for cat_key, stats in sorted_categories[:15]:
+            cat_name = self._compose_category(*(stats.get('depth') or cat_key))
             count = stats['count']
             ranks = stats['ranks']
             prices = stats['prices']
@@ -1088,7 +1109,7 @@ class HacieReportGenerator:
             name = product.get('name', 'N/A')
             depth1 = product.get('category_depth1') or ''
             depth2 = product.get('category_depth2') or ''
-            category = " > ".join(filter(None, [depth1, depth2])) or 'N/A'
+            category = self._compose_category(depth1, depth2)
             best_rank = product.get('best_rank')
             best_date_text = self._format_date_label(product.get('best_rank_date'))
             price_value = self._price_value_from_entry(product)
@@ -1125,7 +1146,7 @@ class HacieReportGenerator:
             for idx, week_product in enumerate(week_products, 1):
                 depth1 = week_product.get('category_depth1') or ''
                 depth2 = week_product.get('category_depth2') or ''
-                category = " > ".join(filter(None, [depth1, depth2])) or 'N/A'
+                category = self._compose_category(depth1, depth2)
                 best_rank = week_product.get('best_rank')
                 best_date_text = self._format_date_label(week_product.get('best_rank_date'))
 
