@@ -528,6 +528,39 @@ def pick_discount_rate(product: Dict[str, Any]) -> Optional[str]:
             if discount_ratio >= 0:
                 return _format_percentage_value(discount_ratio)
 
+    # 할인율 필드가 없으면 정가와 판매가로 계산
+    try:
+        # 정가 후보 필드
+        original_price = None
+        for key in ("customerPrice", "originalPrice", "listPrice", "regularPrice", "price"):
+            if key in product:
+                try:
+                    original_price = int(float(str(product[key]).replace(",", "")))
+                    if original_price > 0:
+                        break
+                except (TypeError, ValueError):
+                    continue
+        
+        # 판매가 후보 필드
+        sale_price = None
+        for key in ("finalPrice", "salePrice", "discountPrice"):
+            if key in product:
+                try:
+                    sale_price = int(float(str(product[key]).replace(",", "")))
+                    if sale_price > 0:
+                        break
+                except (TypeError, ValueError):
+                    continue
+        
+        # 할인율 계산: ((정가 - 판매가) / 정가) * 100
+        if original_price and sale_price and original_price > sale_price:
+            discount_rate = ((original_price - sale_price) / original_price) * 100
+            if discount_rate.is_integer():
+                return f"{int(discount_rate)}%"
+            return f"{discount_rate:.1f}%"
+    except Exception:
+        pass
+
     return None
 
 
