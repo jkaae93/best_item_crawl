@@ -618,8 +618,8 @@ class HacieReportGenerator:
         
         if hacie_count > 0:
             # 테이블 헤더
-            report += """| 순위 | 카테고리 | 상품명 | 가격 |
-|:----:|---------|--------|-----:|
+            report += """| 순위 | 카테고리 | 상품명 | 가격 | 할인율 |
+|:----:|---------|--------|-----:|------:|
 """
             
             # 상위 10개 상품
@@ -644,7 +644,11 @@ class HacieReportGenerator:
                 except:
                     price_str = product.get('가격') or product.get('salePrice', '-')
                 
-                report += f"| {rank} | {category} | {name} | {price_str} |\n"
+                # 할인율 포맷팅
+                discount = product.get('할인율') or product.get('discountRate', '')
+                discount_str = self._format_discount(discount) if discount else '-'
+                
+                report += f"| {rank} | {category} | {name} | {price_str} | {discount_str} |\n"
             
             # 전체 상품 목록
             report += f"""
@@ -655,8 +659,8 @@ class HacieReportGenerator:
 <details>
 <summary>펼쳐서 보기 (전체 {hacie_count}개)</summary>
 
-| 순위 | 카테고리 | 상품명 | 가격 |
-|:----:|---------|--------|-----:|
+| 순위 | 카테고리 | 상품명 | 가격 | 할인율 |
+|:----:|---------|--------|-----:|------:|
 """
             
             # 전체 목록
@@ -681,7 +685,11 @@ class HacieReportGenerator:
                 except:
                     price_str = product.get('가격') or product.get('salePrice', '-')
                 
-                report += f"| {rank} | {category} | {name} | {price_str} |\n"
+                # 할인율 포맷팅
+                discount = product.get('할인율') or product.get('discountRate', '')
+                discount_str = self._format_discount(discount) if discount else '-'
+                
+                report += f"| {rank} | {category} | {name} | {price_str} | {discount_str} |\n"
             
             report += "\n</details>\n"
         else:
