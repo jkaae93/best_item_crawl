@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import math
 import os
 import re
 import time
@@ -393,6 +394,82 @@ def pick_price(product: Dict[str, Any]) -> Optional[int]:
     return None
 
 
+def _coerce_to_float(value: Any) -> Optional[float]:
+    if value in (None, ""):
+        return None
+
+    if isinstance(value, (int, float)):
+        return float(value)
+
+    if isinstance(value, str):
+        stripped = value.strip()
+        if not stripped:
+            return None
+
+        cleaned = re.sub(r"[^0-9.\-]", "", stripped)
+        if not cleaned or cleaned in ("-", ".", "-."):
+            return None
+
+        try:
+            return float(cleaned)
+        except ValueError:
+            return None
+
+    return None
+
+
+def _format_percentage_value(value: float) -> str:
+    rounded = round(value, 1)
+    if math.isclose(rounded, round(rounded), abs_tol=1e-6):
+        formatted = str(int(round(rounded)))
+    else:
+        formatted = f"{rounded:.1f}".rstrip("0").rstrip(".")
+    return f"{formatted}%"
+
+
+def _normalize_percentage_candidate(value: Any) -> Optional[str]:
+    number = _coerce_to_float(value)
+    if number is None:
+        return None
+
+    if number < 0:
+        return None
+
+    if number <= 1:
+        number *= 100
+
+    return _format_percentage_value(number)
+
+
+def pick_original_price(product: Dict[str, Any]) -> Optional[int]:
+    """상품의 정상가(원가) 후보 추출"""
+    original_price_keys = (
+        "originalPrice",
+        "basePrice",
+        "customerPrice",
+        "consumerPrice",
+        "listPrice",
+        "normalPrice",
+        "marketPrice",
+        "retailPrice",
+        "priceOriginal",
+    )
+
+    for key in original_price_keys:
+        if key in product:
+            number = _coerce_to_float(product.get(key))
+            if number and number > 0:
+                return int(round(number))
+
+    for key in original_price_keys:
+        for candidate in find_key_recursive(product, key):
+            number = _coerce_to_float(candidate)
+            if number and number > 0:
+                return int(round(number))
+
+    return None
+
+
 def pick_discount_rate(product: Dict[str, Any]) -> Optional[str]:
     """상품 데이터에서 할인율 추출"""
     numeric_candidates = (
@@ -412,31 +489,15 @@ def pick_discount_rate(product: Dict[str, Any]) -> Optional[str]:
     for key in numeric_candidates:
         if key not in product:
             continue
-        value = product.get(key)
-        if value in (None, ""):
-            continue
+        normalized = _normalize_percentage_candidate(product.get(key))
+        if normalized is not None:
+            return normalized
 
-        try:
-            if isinstance(value, str):
-                cleaned = value.strip().replace("%", "").replace(",", "")
-                if not cleaned:
-                    continue
-                number = float(cleaned)
-            else:
-                number = float(value)
-        except (TypeError, ValueError):
-            continue
-
-        if number < 0:
-            continue
-
-        if number <= 1:
-            number *= 100
-
-        if number.is_integer():
-            number = int(number)
-
-        return f"{number}%"
+    for key in numeric_candidates:
+        for candidate in find_key_recursive(product, key):
+            normalized = _normalize_percentage_candidate(candidate)
+            if normalized is not None:
+                return normalized
 
     text_candidates = (
         "discountRateText",
@@ -448,10 +509,24 @@ def pick_discount_rate(product: Dict[str, Any]) -> Optional[str]:
     for key in text_candidates:
         value = product.get(key)
         if isinstance(value, str) and value.strip():
-            stripped = value.strip()
-            if stripped.endswith("%"):
-                return stripped
-            return f"{stripped}%"
+            normalized = _normalize_percentage_candidate(value)
+            if normalized is not None:
+                return normalized
+
+    for key in text_candidates:
+        for candidate in find_key_recursive(product, key):
+            normalized = _normalize_percentage_candidate(candidate)
+            if normalized is not None:
+                return normalized
+
+    final_price = pick_price(product)
+    original_price = pick_original_price(product)
+
+    if final_price is not None and original_price is not None and original_price > 0:
+        if original_price >= final_price:
+            discount_ratio = (original_price - final_price) / original_price * 100
+            if discount_ratio >= 0:
+                return _format_percentage_value(discount_ratio)
 
     return None
 
