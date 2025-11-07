@@ -616,6 +616,99 @@ def pick_url(product: Dict[str, Any]) -> str:
     return ""
 
 
+def pick_sale_tag(product: Dict[str, Any]) -> str:
+    """세일 태그 추출"""
+    for key in ("saleTag", "sale_tag", "saleLabel"):
+        if key in product and product[key]:
+            return str(product[key])
+    return ""
+
+
+def pick_info_tags(product: Dict[str, Any]) -> str:
+    """정보 태그 추출 (쉼표로 구분)"""
+    for key in ("infoTags", "info_tags", "tags"):
+        if key in product:
+            tags = product[key]
+            if isinstance(tags, list):
+                return ",".join(str(tag) for tag in tags if tag)
+            elif tags:
+                return str(tags)
+    return ""
+
+
+def pick_item_name_front(product: Dict[str, Any]) -> str:
+    """상품명 앞 라벨 추출"""
+    for key in ("itemNameFront", "item_name_front", "nameFront"):
+        if key in product and product[key]:
+            return str(product[key])
+    return ""
+
+
+def pick_item_name_sub(product: Dict[str, Any]) -> str:
+    """서브 상품명 추출"""
+    for key in ("itemNameSub", "item_name_sub", "nameSub", "subName"):
+        if key in product and product[key]:
+            return str(product[key])
+    return ""
+
+
+def pick_review_count(product: Dict[str, Any]) -> int:
+    """리뷰 개수 추출"""
+    for key in ("reviewCnt", "review_cnt", "reviewCount", "review_count"):
+        if key in product:
+            try:
+                return int(product[key])
+            except (TypeError, ValueError):
+                continue
+    return 0
+
+
+def pick_heart_count(product: Dict[str, Any]) -> int:
+    """찜(하트) 개수 추출"""
+    for key in ("heartCnt", "heart_cnt", "heartCount", "heart_count", "likeCnt", "likeCount"):
+        if key in product:
+            try:
+                return int(product[key])
+            except (TypeError, ValueError):
+                continue
+    return 0
+
+
+def pick_review_score(product: Dict[str, Any]) -> float:
+    """리뷰 평점 추출"""
+    for key in ("reviewScore", "review_score", "rating", "reviewRating"):
+        if key in product:
+            try:
+                return float(product[key])
+            except (TypeError, ValueError):
+                continue
+    return 0.0
+
+
+def pick_is_today_delivery(product: Dict[str, Any]) -> str:
+    """당일배송 여부 추출"""
+    for key in ("isTodayDelivery", "is_today_delivery", "todayDeliveryTag", "today_delivery"):
+        if key in product:
+            value = product[key]
+            if isinstance(value, bool):
+                return "Y" if value else "N"
+            elif isinstance(value, str):
+                value_lower = value.lower()
+                if value_lower in ("true", "y", "yes"):
+                    return "Y"
+                elif value_lower in ("false", "n", "no"):
+                    return "N"
+    return "N"
+
+
+def pick_content_info(product: Dict[str, Any]) -> str:
+    """컨텐츠 정보 추출"""
+    for key in ("contentInfo", "content_info", "content"):
+        if key in product and product[key]:
+            return str(product[key])
+    return ""
+
+
 def filter_products_by_brand(products: List[Dict[str, Any]], allowed_brands: List[str]) -> List[Dict[str, Any]]:
     """브랜드로 필터링하고 원래 순위(인덱스) 저장"""
     if not products:
@@ -769,7 +862,11 @@ def write_csv(rows: List[List[Any]], output_dir: Path, timestamp: datetime) -> T
     filename = f"wconcept_best_{time_suffix}.csv"
     out_path = date_dir / filename
     
-    headers = ["날짜", "시간", "브랜드명", "depth1_카테고리", "depth2_카테고리", "순위", "상품명", "가격", "할인율", "상품URL"]
+    headers = [
+        "날짜", "시간", "브랜드명", "depth1_카테고리", "depth2_카테고리", "순위", "상품명", 
+        "가격", "할인율", "상품URL", "세일태그", "정보태그", "상품라벨", "서브상품명", 
+        "당일배송", "리뷰수", "찜수", "리뷰평점", "컨텐츠정보"
+    ]
     with out_path.open("w", newline="", encoding="utf-8") as f:
         writer = csv.writer(f)
         writer.writerow(headers)
@@ -901,6 +998,16 @@ def main():
             price = pick_price(p)
             discount_rate = pick_discount_rate(p)
             url = pick_url(p)
+            sale_tag = pick_sale_tag(p)
+            info_tags = pick_info_tags(p)
+            item_name_front = pick_item_name_front(p)
+            item_name_sub = pick_item_name_sub(p)
+            is_today_delivery = pick_is_today_delivery(p)
+            review_count = pick_review_count(p)
+            heart_count = pick_heart_count(p)
+            review_score = pick_review_score(p)
+            content_info = pick_content_info(p)
+            
             rows.append(
                 [
                     date_str,
@@ -913,6 +1020,15 @@ def main():
                     price if price is not None else "",
                     discount_rate if discount_rate is not None else "",
                     url,
+                    sale_tag,
+                    info_tags,
+                    item_name_front,
+                    item_name_sub,
+                    is_today_delivery,
+                    review_count,
+                    heart_count,
+                    f"{review_score:.1f}" if review_score > 0 else "",
+                    content_info,
                 ]
             )
     
