@@ -307,6 +307,12 @@ class HacieReportGenerator:
                     'category_depth2': product.get('depth2_카테고리') or product.get('depth2_name', ''),
                     'price': self._extract_price_from_product(product),
                     'discount': self._extract_discount_from_product(product),
+                    'sale_tag': product.get('세일태그', ''),
+                    'info_tags': product.get('정보태그', ''),
+                    'review_count': self._parse_int_value(product.get('리뷰수', 0)),
+                    'heart_count': self._parse_int_value(product.get('찜수', 0)),
+                    'review_score': float(product.get('리뷰평점', 0)) if product.get('리뷰평점') else 0.0,
+                    'is_today_delivery': product.get('당일배송', 'N'),
                     'best_rank': rank,
                     'best_rank_date': record_date,
                     'best_record': product,
@@ -509,8 +515,8 @@ class HacieReportGenerator:
         report += f"""
 ## 🌟 주간 베스트 TOP 10
 
-| 순위 | 최고 순위 | 달성일 | 상품명 | 카테고리 | 가격 | 할인율 | 링크 |
-|:----:|---------:|:------:|--------|---------|-----:|------:|:----:|
+| 순위 | 최고 순위 | 달성일 | 상품명 | 카테고리 | 가격 | 할인율 | 세일 | 리뷰 | 찜 | 평점 | 링크 |
+|:----:|---------:|:------:|--------|---------|-----:|------:|-----|----:|---:|:---:|:----:|
 """
 
         for idx, product in enumerate(top_products, 1):
@@ -529,10 +535,21 @@ class HacieReportGenerator:
             best_date_text = self._format_date_label(product.get('best_rank_date'))
             discount_value = self._resolve_entry_discount(product)
             discount_text = self._format_discount(discount_value)
+            
+            # 추가 정보
+            sale_tag = product.get('sale_tag', '-')
+            review_count = product.get('review_count', 0)
+            heart_count = product.get('heart_count', 0)
+            review_score = product.get('review_score', 0.0)
+            
+            review_str = f"{review_count}" if review_count and review_count > 0 else "-"
+            heart_str = f"{heart_count}" if heart_count and heart_count > 0 else "-"
+            score_str = f"{review_score:.1f}" if review_score and review_score > 0 else "-"
+            
             daily_md_path = self._resolve_daily_markdown_path(product.get('best_source_csv'))
             link_markdown = self._format_link('일일 리포트', daily_md_path, report_dir)
 
-            report += f"| {idx} | {best_rank_text} | {best_date_text} | {name} | {category} | {price_str} | {discount_text} | {link_markdown} |\n"
+            report += f"| {idx} | {best_rank_text} | {best_date_text} | {name} | {category} | {price_str} | {discount_text} | {sale_tag} | {review_str} | {heart_str} | {score_str} | {link_markdown} |\n"
         
         report += f"""
 ## 💡 주간 인사이트
@@ -553,6 +570,23 @@ class HacieReportGenerator:
             top_category_key, top_category_stats = max(category_stats.items(), key=lambda x: x[1]['count'])
             top_category_name = self._compose_category(*(top_category_stats.get('depth') or top_category_key))
             report += f"- 🎯 **주력 카테고리**: {top_category_name} ({top_category_stats['count']}회 진입)\n"
+        
+        # 리뷰/찜 통계
+        products_with_reviews = [p for p in product_performance.values() if p.get('review_count', 0) > 0]
+        if products_with_reviews:
+            avg_reviews = sum(p.get('review_count', 0) for p in products_with_reviews) / len(products_with_reviews)
+            avg_hearts = sum(p.get('heart_count', 0) for p in products_with_reviews) / len(products_with_reviews)
+            report += f"- 💬 **평균 리뷰 수**: {avg_reviews:.0f}개 | 평균 찜 수: {avg_hearts:.0f}개\n"
+        
+        # 세일 태그 통계
+        sale_tag_counts = {}
+        for p in all_products:
+            sale_tag = p.get('세일태그', '')
+            if sale_tag and sale_tag != '-':
+                sale_tag_counts[sale_tag] = sale_tag_counts.get(sale_tag, 0) + 1
+        if sale_tag_counts:
+            top_sale = max(sale_tag_counts.items(), key=lambda x: x[1])
+            report += f"- 🏷️ **주요 세일**: {top_sale[0]} ({top_sale[1]}건)\n"
         
         report += f"""
 ### 추천 액션
@@ -631,6 +665,10 @@ class HacieReportGenerator:
                 '기록일': best_date_text,
                 '가격': self._price_value_from_entry(product),
                 '할인율': self._format_discount(discount_value),
+                '세일태그': product.get('sale_tag', ''),
+                '리뷰수': str(product.get('review_count', 0)),
+                '찜수': str(product.get('heart_count', 0)),
+                '평점': f"{product.get('review_score', 0):.1f}" if product.get('review_score', 0) > 0 else '',
                 '상품명': product.get('name', 'N/A'),
                 '링크': link_path
             })
@@ -639,7 +677,7 @@ class HacieReportGenerator:
         if csv_data:
             import io
             output = io.StringIO()
-            writer = csv.DictWriter(output, fieldnames=['유형', '날짜', '상품수', '카테고리', '평균순위', '최고순위', '기록일', '가격', '할인율', '상품명', '링크'])
+            writer = csv.DictWriter(output, fieldnames=['유형', '날짜', '상품수', '카테고리', '평균순위', '최고순위', '기록일', '가격', '할인율', '세일태그', '리뷰수', '찜수', '평점', '상품명', '링크'])
             writer.writeheader()
             writer.writerows(csv_data)
             csv_content = output.getvalue()
@@ -694,8 +732,8 @@ class HacieReportGenerator:
         
         if hacie_count > 0:
             # 테이블 헤더
-            report += """| 순위 | 카테고리 | 상품명 | 가격 | 할인율 |
-|:----:|---------|--------|-----:|------:|
+            report += """| 순위 | 카테고리 | 상품명 | 가격 | 할인율 | 세일태그 | 리뷰 | 찜 | 평점 | 배송 |
+|:----:|---------|--------|-----:|------:|---------|-----:|----:|:----:|:----:|
 """
             
             # 상위 10개 상품
@@ -724,7 +762,32 @@ class HacieReportGenerator:
                 discount = product.get('할인율') or product.get('discountRate', '')
                 discount_str = self._format_discount(discount) if discount else '-'
                 
-                report += f"| {rank} | {category} | {name} | {price_str} | {discount_str} |\n"
+                # 추가 정보
+                sale_tag = product.get('세일태그', '-')
+                info_tags = product.get('정보태그', '')
+                if info_tags:
+                    tags_list = info_tags.split(',')[:2]
+                    sale_tag = f"{sale_tag}<br>{'·'.join(tags_list)}" if sale_tag != '-' else '·'.join(tags_list)
+                
+                review_cnt = product.get('리뷰수', 0)
+                heart_cnt = product.get('찜수', 0)
+                review_score = product.get('리뷰평점', '')
+                is_today = product.get('당일배송', 'N')
+                
+                # 리뷰수, 찜수 포맷팅
+                try:
+                    review_cnt = int(review_cnt) if review_cnt else 0
+                    heart_cnt = int(heart_cnt) if heart_cnt else 0
+                except:
+                    review_cnt = 0
+                    heart_cnt = 0
+                
+                review_str = f"{review_cnt}" if review_cnt > 0 else "-"
+                heart_str = f"{heart_cnt}" if heart_cnt > 0 else "-"
+                score_str = f"{review_score}" if review_score else "-"
+                delivery_str = "당일" if is_today == 'Y' else "-"
+                
+                report += f"| {rank} | {category} | {name} | {price_str} | {discount_str} | {sale_tag} | {review_str} | {heart_str} | {score_str} | {delivery_str} |\n"
             
             # 전체 상품 목록
             report += f"""
@@ -735,8 +798,8 @@ class HacieReportGenerator:
 <details>
 <summary>펼쳐서 보기 (전체 {hacie_count}개)</summary>
 
-| 순위 | 카테고리 | 상품명 | 가격 | 할인율 |
-|:----:|---------|--------|-----:|------:|
+| 순위 | 카테고리 | 상품명 | 가격 | 할인율 | 세일태그 | 리뷰 | 찜 | 평점 | 배송 |
+|:----:|---------|--------|-----:|------:|---------|-----:|----:|:----:|:----:|
 """
             
             # 전체 목록
@@ -765,7 +828,32 @@ class HacieReportGenerator:
                 discount = product.get('할인율') or product.get('discountRate', '')
                 discount_str = self._format_discount(discount) if discount else '-'
                 
-                report += f"| {rank} | {category} | {name} | {price_str} | {discount_str} |\n"
+                # 추가 정보
+                sale_tag = product.get('세일태그', '-')
+                info_tags = product.get('정보태그', '')
+                if info_tags:
+                    tags_list = info_tags.split(',')[:2]
+                    sale_tag = f"{sale_tag}<br>{'·'.join(tags_list)}" if sale_tag != '-' else '·'.join(tags_list)
+                
+                review_cnt = product.get('리뷰수', 0)
+                heart_cnt = product.get('찜수', 0)
+                review_score = product.get('리뷰평점', '')
+                is_today = product.get('당일배송', 'N')
+                
+                # 리뷰수, 찜수 포맷팅
+                try:
+                    review_cnt = int(review_cnt) if review_cnt else 0
+                    heart_cnt = int(heart_cnt) if heart_cnt else 0
+                except:
+                    review_cnt = 0
+                    heart_cnt = 0
+                
+                review_str = f"{review_cnt}" if review_cnt > 0 else "-"
+                heart_str = f"{heart_cnt}" if heart_cnt > 0 else "-"
+                score_str = f"{review_score}" if review_score else "-"
+                delivery_str = "당일" if is_today == 'Y' else "-"
+                
+                report += f"| {rank} | {category} | {name} | {price_str} | {discount_str} | {sale_tag} | {review_str} | {heart_str} | {score_str} | {delivery_str} |\n"
             
             report += "\n</details>\n"
         else:
@@ -973,8 +1061,8 @@ class HacieReportGenerator:
         report += f"""
 ## 🌟 월간 베스트 TOP 20
 
-| 순위 | 최고 순위 | 달성일 | 상품명 | 카테고리 | 가격 | 할인율 | 링크 |
-|:----:|---------:|:------:|--------|---------|-----:|------:|:----:|
+| 순위 | 최고 순위 | 달성일 | 상품명 | 카테고리 | 가격 | 할인율 | 세일 | 리뷰 | 찜 | 평점 | 링크 |
+|:----:|---------:|:------:|--------|---------|-----:|------:|-----|----:|---:|:---:|:----:|
 """
 
         for idx, product in enumerate(top_products, 1):
@@ -997,10 +1085,21 @@ class HacieReportGenerator:
             best_date_text = self._format_date_label(product.get('best_rank_date'))
             discount_value = self._resolve_entry_discount(product)
             discount_text = self._format_discount(discount_value)
+            
+            # 추가 정보
+            sale_tag = product.get('sale_tag', '-')
+            review_count = product.get('review_count', 0)
+            heart_count = product.get('heart_count', 0)
+            review_score = product.get('review_score', 0.0)
+            
+            review_str = f"{review_count}" if review_count and review_count > 0 else "-"
+            heart_str = f"{heart_count}" if heart_count and heart_count > 0 else "-"
+            score_str = f"{review_score:.1f}" if review_score and review_score > 0 else "-"
+            
             daily_md_path = self._resolve_daily_markdown_path(product.get('best_source_csv'))
             link_markdown = self._format_link('일일 리포트', daily_md_path, report_dir)
 
-            report += f"| {idx} | {best_rank_text} | {best_date_text} | {name} | {category} | {price_str} | {discount_text} | {link_markdown} |\n"
+            report += f"| {idx} | {best_rank_text} | {best_date_text} | {name} | {category} | {price_str} | {discount_text} | {sale_tag} | {review_str} | {heart_str} | {score_str} | {link_markdown} |\n"
         
         if weekly_product_best:
             report += """
@@ -1022,8 +1121,8 @@ class HacieReportGenerator:
                 report += f"""
 ### {week_index}주차 베스트 5
 
-| 순위 | 최고 순위 | 달성일 | 상품명 | 카테고리 | 가격 | 할인율 | 링크 |
-|:----:|---------:|:------:|--------|---------|-----:|------:|:----:|
+| 순위 | 최고 순위 | 달성일 | 상품명 | 카테고리 | 가격 | 할인율 | 세일 | 리뷰 | 찜 | 평점 | 링크 |
+|:----:|---------:|:------:|--------|---------|-----:|------:|-----|----:|---:|:---:|:----:|
 """
 
                 for idx, week_product in enumerate(week_products, 1):
@@ -1045,8 +1144,18 @@ class HacieReportGenerator:
                     best_date_text = self._format_date_label(week_product.get('best_rank_date'))
                     price_str = self._price_display_from_entry(week_product)
                     discount_text = self._format_discount(self._resolve_entry_discount(week_product))
+                    
+                    # 추가 정보
+                    week_sale_tag = week_product.get('sale_tag', '-')
+                    week_review_count = week_product.get('review_count', 0)
+                    week_heart_count = week_product.get('heart_count', 0)
+                    week_review_score = week_product.get('review_score', 0.0)
+                    
+                    week_review_str = f"{week_review_count}" if week_review_count and week_review_count > 0 else "-"
+                    week_heart_str = f"{week_heart_count}" if week_heart_count and week_heart_count > 0 else "-"
+                    week_score_str = f"{week_review_score:.1f}" if week_review_score and week_review_score > 0 else "-"
 
-                    report += f"| {idx} | {best_rank_text} | {best_date_text} | {name} | {category} | {price_str} | {discount_text} | {weekly_link} |\n"
+                    report += f"| {idx} | {best_rank_text} | {best_date_text} | {name} | {category} | {price_str} | {discount_text} | {week_sale_tag} | {week_review_str} | {week_heart_str} | {week_score_str} | {weekly_link} |\n"
 
         report += f"""
 ## 💡 월간 인사이트
@@ -1213,6 +1322,10 @@ class HacieReportGenerator:
                 '기록일': best_date_text,
                 '가격': price_value,
                 '할인율': self._format_discount(discount_value),
+                '세일태그': product.get('sale_tag', ''),
+                '리뷰수': str(product.get('review_count', 0)),
+                '찜수': str(product.get('heart_count', 0)),
+                '평점': f"{product.get('review_score', 0):.1f}" if product.get('review_score', 0) > 0 else '',
                 '상품명': name,
                 '링크': link_path
             })
@@ -1246,6 +1359,10 @@ class HacieReportGenerator:
                     '기록일': best_date_text,
                     '가격': self._price_value_from_entry(week_product),
                     '할인율': self._format_discount(self._resolve_entry_discount(week_product)),
+                    '세일태그': week_product.get('sale_tag', ''),
+                    '리뷰수': str(week_product.get('review_count', 0)),
+                    '찜수': str(week_product.get('heart_count', 0)),
+                    '평점': f"{week_product.get('review_score', 0):.1f}" if week_product.get('review_score', 0) > 0 else '',
                     '상품명': week_product.get('name', 'N/A'),
                     '링크': weekly_link_path
                 })
@@ -1254,7 +1371,7 @@ class HacieReportGenerator:
         if csv_data:
             import io
             output = io.StringIO()
-            writer = csv.DictWriter(output, fieldnames=['유형', '기간', '상품수', '일평균', '카테고리', '평균순위', '평균가격', '최고순위', '기록일', '가격', '할인율', '상품명', '링크'])
+            writer = csv.DictWriter(output, fieldnames=['유형', '기간', '상품수', '일평균', '카테고리', '평균순위', '평균가격', '최고순위', '기록일', '가격', '할인율', '세일태그', '리뷰수', '찜수', '평점', '상품명', '링크'])
             writer.writeheader()
             writer.writerows(csv_data)
             csv_content = output.getvalue()
