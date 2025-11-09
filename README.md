@@ -94,11 +94,15 @@ python3 scripts/wconcept_best_export.py
 # 4. 테스트 실행 (3개 카테고리만)
 python3 scripts/wconcept_best_export.py --skip-category-update --test-mode
 
-# 5. 주간 리포트 생성
+# 5. 주간 리포트 생성 (슬랙 알림 포함)
+export SLACK_WEBHOOK_URL="https://hooks.slack.com/services/YOUR/WEBHOOK/URL"
 python3 scripts/generate_reports.py weekly 2025 10 3
 
-# 6. 월간 리포트 생성
+# 6. 월간 리포트 생성 (슬랙 알림 포함)
 python3 scripts/generate_reports.py monthly 2025 10
+
+# 7. 일일 리포트 생성
+python3 scripts/generate_reports.py daily output/2025/10/21/wconcept_best_*.csv output/2025/10/21/일일_요약.md
 ```
 
 ## 📊 데이터 구조
@@ -182,7 +186,27 @@ python3 scripts/generate_reports.py monthly 2025 10
    - Workflow permissions: **"Read and write permissions"** 선택
    - "Allow GitHub Actions to create and approve pull requests" 체크
 
-3. **알림 설정 (선택사항)**
+3. **슬랙 알림 설정 (선택사항)**
+   - 슬랙 워크스페이스에서 Incoming Webhook 생성:
+     1. https://api.slack.com/apps 접속
+     2. "Create New App" → "From scratch"
+     3. "Incoming Webhooks" 활성화
+     4. "Add New Webhook to Workspace"
+     5. 알림 받을 채널 선택
+     6. Webhook URL 복사 (예: `https://hooks.slack.com/services/...`)
+   
+   - GitHub 저장소 → Settings → Secrets and variables → Actions
+   - "New repository secret" 클릭
+   - Name: `SLACK_WEBHOOK_URL`
+   - Secret: 복사한 Webhook URL 붙여넣기
+   - "Add secret" 클릭
+   
+   **알림 내용:**
+   - ✅ 주간 리포트 생성 성공 시 슬랙 알림
+   - ✅ 월간 리포트 생성 성공 시 슬랙 알림
+   - 🚨 모든 리포트 생성 실패 시 슬랙 알림
+
+4. **이메일 알림 설정 (선택사항)**
    - 저장소 우측 상단 "Watch" → "Custom"
    - "Commits" 체크
    - 매일 커밋 시 이메일 수신
@@ -324,6 +348,12 @@ python3 scripts/generate_reports.py monthly 2025 10
 
 **Q7. 더 빠르게 실행하고 싶어요**
 → `--skip-category-update` 옵션 사용 (Playwright 건너뛰기)
+
+**Q8. 슬랙 알림이 오지 않아요**
+→ GitHub Secrets에 `SLACK_WEBHOOK_URL`이 올바르게 설정되었는지 확인하세요
+
+**Q9. 슬랙 알림을 비활성화하고 싶어요**
+→ GitHub Secrets에서 `SLACK_WEBHOOK_URL`을 삭제하면 알림이 비활성화됩니다
 
 ## 🔧 기술 스택
 

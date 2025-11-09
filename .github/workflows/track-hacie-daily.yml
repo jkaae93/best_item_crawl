@@ -141,6 +141,8 @@ jobs:
       - name: Generate daily summary
         if: steps.organize.outputs.file_exists == 'true'
         shell: bash
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
         run: |
           csv_file="${{ steps.organize.outputs.csv_file }}"
           year="${{ steps.organize.outputs.year }}"
