@@ -386,7 +386,11 @@ class HacieReportGenerator:
         try:
             with open(csv_file, 'r', encoding='utf-8') as f:
                 reader = csv.DictReader(f)
+                total_rows = 0
+                hacie_rows = 0
+                
                 for row in reader:
+                    total_rows += 1
                     row_data = dict(row)
                     row_data['__source_csv__'] = source_csv_path
                     
@@ -396,13 +400,23 @@ class HacieReportGenerator:
                     # HACIE 브랜드 필터링
                     if brand_name and ('HACIE' in brand_name.upper() or '하시에' in brand_name):
                         products.append(row_data)
+                        hacie_rows += 1
                     else:
                         # 브랜드 필드 없으면 상품명에서 확인
                         product_name = row_data.get('상품명') or row_data.get('productName') or ''
                         if product_name and ('HACIE' in product_name.upper() or '하시에' in product_name):
                             products.append(row_data)
+                            hacie_rows += 1
+                
+                print(f"📊 CSV 통계: 전체 {total_rows}개 행, HACIE 제품 {hacie_rows}개 발견")
+                
+                if total_rows == 0:
+                    print("⚠️ CSV 파일에 데이터 행이 없습니다 (헤더만 존재)")
+                    
         except Exception as e:
-            print(f"CSV 파싱 에러 ({csv_file}): {e}")
+            print(f"❌ CSV 파싱 에러 ({csv_file}): {e}")
+            import traceback
+            traceback.print_exc()
         
         return products
     
@@ -692,11 +706,19 @@ class HacieReportGenerator:
     def generate_daily_report(self, csv_file_path: Path) -> Optional[Dict[str, str]]:
         """일일 리포트 생성"""
         if not csv_file_path.exists():
+            print(f"❌ CSV 파일이 존재하지 않습니다: {csv_file_path}")
             return None
         
         # CSV 파일 파싱
-        products = self.parse_csv(csv_file_path)
-        hacie_count = len(products)
+        try:
+            products = self.parse_csv(csv_file_path)
+            hacie_count = len(products)
+            print(f"✓ CSV 파싱 완료: {hacie_count}개의 HACIE 상품 발견")
+        except Exception as e:
+            print(f"❌ CSV 파싱 중 오류 발생: {e}")
+            import traceback
+            traceback.print_exc()
+            return None
         
         # 파일 정보 추출
         csv_name = csv_file_path.name
@@ -1407,18 +1429,39 @@ def main():
         csv_file_path = Path(sys.argv[2])
         output_file_path = Path(sys.argv[3])
         
-        result = generator.generate_daily_report(csv_file_path)
+        print(f"📄 CSV 파일 경로: {csv_file_path}")
+        print(f"📝 출력 파일 경로: {output_file_path}")
         
-        if result:
-            # 출력 디렉토리 생성
-            output_file_path.parent.mkdir(parents=True, exist_ok=True)
+        # CSV 파일 존재 및 내용 확인
+        if not csv_file_path.exists():
+            print(f"❌ CSV 파일을 찾을 수 없습니다: {csv_file_path}")
+            sys.exit(1)
+        
+        # CSV 파일 크기 확인
+        file_size = csv_file_path.stat().st_size
+        print(f"📊 CSV 파일 크기: {file_size} bytes")
+        
+        if file_size == 0:
+            print("⚠️ CSV 파일이 비어있습니다.")
+        
+        try:
+            result = generator.generate_daily_report(csv_file_path)
             
-            # 마크다운 저장
-            with open(output_file_path, 'w', encoding='utf-8') as f:
-                f.write(result['markdown'])
-            print(f"✓ 일일 리포트 생성: {output_file_path}")
-        else:
-            print("✗ 데이터가 없습니다.")
+            if result:
+                # 출력 디렉토리 생성
+                output_file_path.parent.mkdir(parents=True, exist_ok=True)
+                
+                # 마크다운 저장
+                with open(output_file_path, 'w', encoding='utf-8') as f:
+                    f.write(result['markdown'])
+                print(f"✓ 일일 리포트 생성 완료: {output_file_path}")
+            else:
+                print("❌ 리포트 생성 실패: 데이터가 없습니다.")
+                sys.exit(1)
+        except Exception as e:
+            print(f"❌ 리포트 생성 중 예외 발생: {e}")
+            import traceback
+            traceback.print_exc()
             sys.exit(1)
     
     elif report_type == 'weekly':
