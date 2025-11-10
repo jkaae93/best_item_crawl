@@ -13,15 +13,53 @@ from typing import List, Dict, Optional
 from collections import defaultdict
 import statistics
 from zoneinfo import ZoneInfo
+import requests
 
 
 class HacieReportGenerator:
     """HACIE 통계 리포트 생성기"""
     
-    def __init__(self, output_dir: Path = None):
+    def __init__(self, output_dir: Path = None, slack_webhook_url: str = None):
         if output_dir is None:
             output_dir = Path(__file__).parent.parent / 'output'
         self.output_dir = output_dir
+        self.slack_webhook_url = slack_webhook_url or os.getenv('SLACK_WEBHOOK_URL')
+    
+    def send_slack_notification(self, message: str, is_error: bool = False) -> bool:
+        """슬랙 알림 전송"""
+        if not self.slack_webhook_url:
+            print("⚠️ 슬랙 웹훅 URL이 설정되지 않았습니다. 알림을 건너뜁니다.")
+            return False
+        
+        try:
+            emoji = "🚨" if is_error else "✅"
+            color = "#FF0000" if is_error else "#36a64f"
+            
+            payload = {
+                "attachments": [{
+                    "color": color,
+                    "text": f"{emoji} {message}",
+                    "footer": "HACIE 리포트 시스템",
+                    "ts": int(datetime.now(ZoneInfo("Asia/Seoul")).timestamp())
+                }]
+            }
+            
+            response = requests.post(
+                self.slack_webhook_url,
+                json=payload,
+                timeout=10
+            )
+            
+            if response.status_code == 200:
+                print(f"✓ 슬랙 알림 전송 완료")
+                return True
+            else:
+                print(f"⚠️ 슬랙 알림 전송 실패: {response.status_code}")
+                return False
+                
+        except Exception as e:
+            print(f"⚠️ 슬랙 알림 전송 중 오류: {e}")
+            return False
     
     @staticmethod
     def _get_product_key(product: Dict) -> Optional[str]:
@@ -386,7 +424,11 @@ class HacieReportGenerator:
         try:
             with open(csv_file, 'r', encoding='utf-8') as f:
                 reader = csv.DictReader(f)
+                total_rows = 0
+                hacie_rows = 0
+                
                 for row in reader:
+                    total_rows += 1
                     row_data = dict(row)
                     row_data['__source_csv__'] = source_csv_path
                     
@@ -396,13 +438,23 @@ class HacieReportGenerator:
                     # HACIE 브랜드 필터링
                     if brand_name and ('HACIE' in brand_name.upper() or '하시에' in brand_name):
                         products.append(row_data)
+                        hacie_rows += 1
                     else:
                         # 브랜드 필드 없으면 상품명에서 확인
                         product_name = row_data.get('상품명') or row_data.get('productName') or ''
                         if product_name and ('HACIE' in product_name.upper() or '하시에' in product_name):
                             products.append(row_data)
+                            hacie_rows += 1
+                
+                print(f"📊 CSV 통계: 전체 {total_rows}개 행, HACIE 제품 {hacie_rows}개 발견")
+                
+                if total_rows == 0:
+                    print("⚠️ CSV 파일에 데이터 행이 없습니다 (헤더만 존재)")
+                    
         except Exception as e:
-            print(f"CSV 파싱 에러 ({csv_file}): {e}")
+            print(f"❌ CSV 파싱 에러 ({csv_file}): {e}")
+            import traceback
+            traceback.print_exc()
         
         return products
     
@@ -692,11 +744,19 @@ class HacieReportGenerator:
     def generate_daily_report(self, csv_file_path: Path) -> Optional[Dict[str, str]]:
         """일일 리포트 생성"""
         if not csv_file_path.exists():
+            print(f"❌ CSV 파일이 존재하지 않습니다: {csv_file_path}")
             return None
         
         # CSV 파일 파싱
-        products = self.parse_csv(csv_file_path)
-        hacie_count = len(products)
+        try:
+            products = self.parse_csv(csv_file_path)
+            hacie_count = len(products)
+            print(f"✓ CSV 파싱 완료: {hacie_count}개의 HACIE 상품 발견")
+        except Exception as e:
+            print(f"❌ CSV 파싱 중 오류 발생: {e}")
+            import traceback
+            traceback.print_exc()
+            return None
         
         # 파일 정보 추출
         csv_name = csv_file_path.name
@@ -1388,6 +1448,7 @@ def main():
     """메인 함수"""
     import sys
     
+    # 슬랙 웹훅 URL은 환경변수에서 자동으로 로드됨
     generator = HacieReportGenerator()
     
     if len(sys.argv) < 2:
@@ -1407,18 +1468,61 @@ def main():
         csv_file_path = Path(sys.argv[2])
         output_file_path = Path(sys.argv[3])
         
-        result = generator.generate_daily_report(csv_file_path)
+        print(f"📄 CSV 파일 경로: {csv_file_path}")
+        print(f"📝 출력 파일 경로: {output_file_path}")
         
-        if result:
-            # 출력 디렉토리 생성
-            output_file_path.parent.mkdir(parents=True, exist_ok=True)
+        # CSV 파일 존재 및 내용 확인
+        if not csv_file_path.exists():
+            print(f"❌ CSV 파일을 찾을 수 없습니다: {csv_file_path}")
+            sys.exit(1)
+        
+        # CSV 파일 크기 확인
+        file_size = csv_file_path.stat().st_size
+        print(f"📊 CSV 파일 크기: {file_size} bytes")
+        
+        if file_size == 0:
+            print("⚠️ CSV 파일이 비어있습니다.")
+        
+        try:
+            result = generator.generate_daily_report(csv_file_path)
             
-            # 마크다운 저장
-            with open(output_file_path, 'w', encoding='utf-8') as f:
-                f.write(result['markdown'])
-            print(f"✓ 일일 리포트 생성: {output_file_path}")
-        else:
-            print("✗ 데이터가 없습니다.")
+            if result:
+                # 출력 디렉토리 생성
+                output_file_path.parent.mkdir(parents=True, exist_ok=True)
+                
+                # 마크다운 저장
+                with open(output_file_path, 'w', encoding='utf-8') as f:
+                    f.write(result['markdown'])
+                print(f"✓ 일일 리포트 생성 완료: {output_file_path}")
+                
+                # 성공 알림
+                # 파일명에서 날짜 추출 (wconcept_best_251110_082030.csv)
+                file_basename = csv_file_path.name
+                # 날짜 형식 변환: 251110 -> 2025년 11월 10일
+                if 'wconcept_best_' in file_basename:
+                    date_part = file_basename.split('_')[2]  # 251110
+                    if len(date_part) == 6:
+                        year_short = date_part[:2]
+                        month = date_part[2:4]
+                        day = date_part[4:6]
+                        success_msg = f"일일 리포트 생성 완료\n날짜: 20{year_short}년 {month}월 {day}일"
+                    else:
+                        success_msg = f"일일 리포트 생성 완료\n파일: {file_basename}"
+                else:
+                    success_msg = f"일일 리포트 생성 완료\n파일: {file_basename}"
+                
+                generator.send_slack_notification(success_msg, is_error=False)
+            else:
+                error_msg = f"일일 리포트 생성 실패\n파일: {csv_file_path.name}\n원인: 데이터가 없거나 파싱 실패"
+                print(f"❌ {error_msg}")
+                generator.send_slack_notification(error_msg, is_error=True)
+                sys.exit(1)
+        except Exception as e:
+            error_msg = f"일일 리포트 생성 중 예외 발생\n파일: {csv_file_path.name}\n오류: {str(e)}"
+            print(f"❌ {error_msg}")
+            import traceback
+            traceback.print_exc()
+            generator.send_slack_notification(error_msg, is_error=True)
             sys.exit(1)
     
     elif report_type == 'weekly':
@@ -1426,55 +1530,85 @@ def main():
         month = int(sys.argv[3])
         week = int(sys.argv[4])
         
-        result = generator.generate_weekly_report(year, month, week)
-        
-        if result:
-            # 저장 폴더
-            output_dir = generator.output_dir / str(year) / f"{month:02d}"
-            output_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            result = generator.generate_weekly_report(year, month, week)
             
-            base_filename = f"{year}년_{month:02d}월_{week}주차_통계"
-            
-            # 마크다운 저장
-            md_file = output_dir / f"{base_filename}.md"
-            with open(md_file, 'w', encoding='utf-8') as f:
-                f.write(result['markdown'])
-            print(f"✓ 주간 리포트(MD) 생성: {md_file}")
-            
-            # CSV 저장
-            csv_file = output_dir / f"{base_filename}.csv"
-            with open(csv_file, 'w', encoding='utf-8') as f:
-                f.write(result['csv'])
-            print(f"✓ 주간 리포트(CSV) 생성: {csv_file}")
-        else:
-            print("✗ 데이터가 없습니다.")
+            if result:
+                # 저장 폴더
+                output_dir = generator.output_dir / str(year) / f"{month:02d}"
+                output_dir.mkdir(parents=True, exist_ok=True)
+                
+                base_filename = f"{year}년_{month:02d}월_{week}주차_통계"
+                
+                # 마크다운 저장
+                md_file = output_dir / f"{base_filename}.md"
+                with open(md_file, 'w', encoding='utf-8') as f:
+                    f.write(result['markdown'])
+                print(f"✓ 주간 리포트(MD) 생성: {md_file}")
+                
+                # CSV 저장
+                csv_file = output_dir / f"{base_filename}.csv"
+                with open(csv_file, 'w', encoding='utf-8') as f:
+                    f.write(result['csv'])
+                print(f"✓ 주간 리포트(CSV) 생성: {csv_file}")
+                
+                # 성공 알림
+                success_msg = f"주간 리포트 생성 완료\n기간: {year}년 {month:02d}월 {week}주차"
+                generator.send_slack_notification(success_msg, is_error=False)
+            else:
+                error_msg = f"주간 리포트 생성 실패\n기간: {year}년 {month:02d}월 {week}주차\n원인: 데이터가 없습니다"
+                print(f"✗ {error_msg}")
+                generator.send_slack_notification(error_msg, is_error=True)
+                sys.exit(1)
+        except Exception as e:
+            error_msg = f"주간 리포트 생성 중 예외 발생\n기간: {year}년 {month:02d}월 {week}주차\n오류: {str(e)}"
+            print(f"❌ {error_msg}")
+            import traceback
+            traceback.print_exc()
+            generator.send_slack_notification(error_msg, is_error=True)
+            sys.exit(1)
     
     elif report_type == 'monthly':
         year = int(sys.argv[2])
         month = int(sys.argv[3])
         
-        result = generator.generate_monthly_report(year, month)
-        
-        if result:
-            # 저장 폴더
-            output_dir = generator.output_dir / str(year) / f"{month:02d}"
-            output_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            result = generator.generate_monthly_report(year, month)
             
-            base_filename = f"{year}년_{month:02d}월_월간통계"
-            
-            # 마크다운 저장
-            md_file = output_dir / f"{base_filename}.md"
-            with open(md_file, 'w', encoding='utf-8') as f:
-                f.write(result['markdown'])
-            print(f"✓ 월간 리포트(MD) 생성: {md_file}")
-            
-            # CSV 저장
-            csv_file = output_dir / f"{base_filename}.csv"
-            with open(csv_file, 'w', encoding='utf-8') as f:
-                f.write(result['csv'])
-            print(f"✓ 월간 리포트(CSV) 생성: {csv_file}")
-        else:
-            print("✗ 데이터가 없습니다.")
+            if result:
+                # 저장 폴더
+                output_dir = generator.output_dir / str(year) / f"{month:02d}"
+                output_dir.mkdir(parents=True, exist_ok=True)
+                
+                base_filename = f"{year}년_{month:02d}월_월간통계"
+                
+                # 마크다운 저장
+                md_file = output_dir / f"{base_filename}.md"
+                with open(md_file, 'w', encoding='utf-8') as f:
+                    f.write(result['markdown'])
+                print(f"✓ 월간 리포트(MD) 생성: {md_file}")
+                
+                # CSV 저장
+                csv_file = output_dir / f"{base_filename}.csv"
+                with open(csv_file, 'w', encoding='utf-8') as f:
+                    f.write(result['csv'])
+                print(f"✓ 월간 리포트(CSV) 생성: {csv_file}")
+                
+                # 성공 알림
+                success_msg = f"월간 리포트 생성 완료\n기간: {year}년 {month:02d}월"
+                generator.send_slack_notification(success_msg, is_error=False)
+            else:
+                error_msg = f"월간 리포트 생성 실패\n기간: {year}년 {month:02d}월\n원인: 데이터가 없습니다"
+                print(f"✗ {error_msg}")
+                generator.send_slack_notification(error_msg, is_error=True)
+                sys.exit(1)
+        except Exception as e:
+            error_msg = f"월간 리포트 생성 중 예외 발생\n기간: {year}년 {month:02d}월\n오류: {str(e)}"
+            print(f"❌ {error_msg}")
+            import traceback
+            traceback.print_exc()
+            generator.send_slack_notification(error_msg, is_error=True)
+            sys.exit(1)
 
 
 if __name__ == '__main__':
