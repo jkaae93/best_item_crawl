@@ -1494,6 +1494,24 @@ def main():
                 with open(output_file_path, 'w', encoding='utf-8') as f:
                     f.write(result['markdown'])
                 print(f"✓ 일일 리포트 생성 완료: {output_file_path}")
+                
+                # 성공 알림
+                # 파일명에서 날짜 추출 (wconcept_best_251110_082030.csv)
+                file_basename = csv_file_path.name
+                # 날짜 형식 변환: 251110 -> 2025년 11월 10일
+                if 'wconcept_best_' in file_basename:
+                    date_part = file_basename.split('_')[2]  # 251110
+                    if len(date_part) == 6:
+                        year_short = date_part[:2]
+                        month = date_part[2:4]
+                        day = date_part[4:6]
+                        success_msg = f"일일 리포트 생성 완료\n날짜: 20{year_short}년 {month}월 {day}일"
+                    else:
+                        success_msg = f"일일 리포트 생성 완료\n파일: {file_basename}"
+                else:
+                    success_msg = f"일일 리포트 생성 완료\n파일: {file_basename}"
+                
+                generator.send_slack_notification(success_msg, is_error=False)
             else:
                 error_msg = f"일일 리포트 생성 실패\n파일: {csv_file_path.name}\n원인: 데이터가 없거나 파싱 실패"
                 print(f"❌ {error_msg}")
