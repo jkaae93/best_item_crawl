@@ -161,7 +161,7 @@ jobs:
           echo "📊 CSV 파일 크기: $(wc -l < "$csv_file") 줄"
           
           # HACIE 상품 개수 계산 (디버깅용)
-          hacie_count=$(grep -iE "HACIE|하시에" "$csv_file" 2>/dev/null | wc -l | xargs)
+          hacie_count=$({ grep -iE "HACIE|하시에" "$csv_file" 2>/dev/null || true; } | wc -l | xargs)
           echo "📊 발견된 HACIE 상품: ${hacie_count}개"
           
           # 마크다운 파일명: 일일_요약_yyMMdd_hhmmss.md (CSV와 동일한 타임스탬프)
@@ -220,7 +220,7 @@ jobs:
             echo "변경사항이 없습니다."
           else
             # HACIE 상품 수 계산
-            hacie_count=$(grep -iE "HACIE|하시에" "$csv_file" 2>/dev/null | wc -l | xargs)
+            hacie_count=$({ grep -iE "HACIE|하시에" "$csv_file" 2>/dev/null || true; } | wc -l | xargs)
             
             kst_time=$(date '+%Y년 %m월 %d일 %H:%M:%S')
             
@@ -278,7 +278,7 @@ jobs:
           day="${{ steps.organize.outputs.day }}"
           time_suffix="${{ steps.organize.outputs.time_suffix }}"
           
-          hacie_count=$(grep -iE "HACIE|하시에" "$csv_file" 2>/dev/null | wc -l | xargs)
+          hacie_count=$({ grep -iE "HACIE|하시에" "$csv_file" 2>/dev/null || true; } | wc -l | xargs)
           
           # time_suffix에서 시간 추출 (yyMMdd_HHMMSS -> HH:MM:SS)
           time_part=$(echo "$time_suffix" | cut -d'_' -f2)
@@ -297,7 +297,7 @@ jobs:
             echo '| 순위 | 카테고리 | 상품명 | 가격 |' >> $GITHUB_STEP_SUMMARY
             echo '|:----:|---------|--------|-----:|' >> $GITHUB_STEP_SUMMARY
             
-            grep -iE "HACIE|하시에" "$csv_file" 2>/dev/null | head -10 | while IFS=',' read -r date time depth1 depth2 rank name price rest; do
+            { grep -iE "HACIE|하시에" "$csv_file" 2>/dev/null || true; } | head -10 | while IFS=',' read -r date time depth1 depth2 rank name price rest; do
               name_clean=$(echo "$name" | sed 's/"//g' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
               price_clean=$(echo "$price" | sed 's/"//g' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
               rank_clean=$(echo "$rank" | sed 's/"//g' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
@@ -333,7 +333,7 @@ jobs:
           csv_name="${{ steps.organize.outputs.csv_name }}"
           
           # HACIE 상품 수 계산
-          hacie_count=$(grep -iE "HACIE|하시에" "$csv_file" 2>/dev/null | wc -l | xargs)
+          hacie_count=$({ grep -iE "HACIE|하시에" "$csv_file" 2>/dev/null || true; } | wc -l | xargs)
           
           # 현재 시각
           kst_time=$(date '+%Y년 %m월 %d일 %H:%M:%S')
