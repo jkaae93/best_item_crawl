@@ -341,33 +341,42 @@ jobs:
           # 상위 5개 상품 추출 (Slack 메시지용)
           top5_text=""
           if [ $hacie_count -gt 0 ]; then
-            top5_text=$(python3 -c "
-          import csv
-          csv_file = '${csv_file}'
-          items = []
-          try:
-              with open(csv_file, 'r', encoding='utf-8') as f:
-                  reader = csv.reader(f)
-                  header = next(reader)
-                  count = 0
-                  for row in reader:
-                      if len(row) < 7:
-                          continue
-                      product_name = row[5] if len(row) > 5 else ''
-                      if 'hacie' not in product_name.lower() and '하시에' not in product_name:
-                          continue
-                      rank = row[4] if len(row) > 4 else '-'
-                      category = row[3] if len(row) > 3 else '-'
-                      if len(product_name) > 40:
-                          product_name = product_name[:40] + '...'
-                      items.append(f'{rank}위. {product_name} ({category})')
-                      count += 1
-                      if count >= 5:
-                          break
-              print('\n'.join(items))
-          except Exception as e:
-              print('데이터 추출 오류')
-          ")
+            top5_text=$(python3 - <<PY
+import csv
+
+csv_file = "${csv_file}"
+items = []
+
+try:
+    with open(csv_file, newline="", encoding="utf-8") as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            brand_ko = (row.get("브랜드명") or "").lower()
+            brand_en = (row.get("브랜드영문명") or "").lower()
+
+            if "hacie" not in brand_en and "하시에" not in brand_ko:
+                continue
+
+            rank = (row.get("순위") or row.get("rank") or "-").strip()
+            category = (row.get("depth2_카테고리") or row.get("depth2_name") or "-").strip()
+            product_name = (row.get("상품명") or row.get("productName") or "").strip()
+
+            if not product_name:
+                product_name = (row.get("브랜드영문명") or row.get("브랜드명") or "상품명 없음").strip()
+
+            if len(product_name) > 40:
+                product_name = product_name[:40] + "..."
+
+            items.append(f"{rank}위. {product_name} ({category})")
+
+            if len(items) >= 5:
+                break
+
+    print("\n".join(items))
+except Exception:
+    print("데이터 추출 오류")
+PY
+)
           fi
           
           # Repository URL
