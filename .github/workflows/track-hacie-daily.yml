@@ -138,6 +138,118 @@ jobs:
             echo "⚠️ CSV 파일이 생성되지 않았습니다."
           fi
       
+      - name: Prepare daily stats
+        id: stats
+        if: steps.organize.outputs.file_exists == 'true'
+        shell: bash
+        run: |
+          csv_file="${{ steps.organize.outputs.csv_file }}"
+
+          python3 - "$csv_file" >> "$GITHUB_OUTPUT" <<'PY'
+          import csv
+          import sys
+          from pathlib import Path
+
+
+          def is_hacie(row):
+              brand_kr = (row.get("브랜드명") or "").strip()
+              brand_en = (row.get("브랜드영문명") or "").strip().upper()
+              product_name = (row.get("상품명") or "").strip().upper()
+              return "하시에" in brand_kr or brand_en == "HACIE" or "HACIE" in product_name
+
+
+          def parse_rank(row):
+              try:
+                  return int(str(row.get("순위") or "").replace(",", "").strip())
+              except (TypeError, ValueError):
+                  return 999999
+
+
+          def parse_price(row):
+              raw = (row.get("가격") or "").strip()
+              if not raw:
+                  return "-"
+              try:
+                  return f"₩{int(raw.replace(',', '')):,}"
+              except ValueError:
+                  return raw
+
+
+          def truncate(text, limit):
+              text = (text or "").strip()
+              if not text:
+                  return "-"
+              if len(text) <= limit:
+                  return text
+              return text[:limit] + "..."
+
+
+          path = Path(sys.argv[1])
+          filtered_rows = []
+          best_by_key = {}
+
+          with path.open("r", encoding="utf-8", newline="") as f:
+              reader = csv.DictReader(f)
+              for row in reader:
+                  if not is_hacie(row):
+                      continue
+
+                  filtered_rows.append(row)
+                  product_key = (
+                      (row.get("상품코드") or "").strip()
+                      or (row.get("상품URL") or "").strip()
+                      or (row.get("상품명") or "").strip()
+                      or f"row-{len(filtered_rows)}"
+                  )
+                  rank = parse_rank(row)
+                  existing = best_by_key.get(product_key)
+
+                  if existing is None or rank < existing[0]:
+                      best_by_key[product_key] = (rank, row)
+
+          top_rows = [
+              row
+              for _, row in sorted(
+                  best_by_key.values(),
+                  key=lambda item: (item[0], (item[1].get("상품명") or "").strip()),
+              )
+          ]
+
+          top5_lines = []
+          for row in top_rows[:5]:
+              rank = (row.get("순위") or "-").strip() or "-"
+              category = (
+                  (row.get("depth2_카테고리") or "").strip()
+                  or (row.get("depth3_카테고리") or "").strip()
+                  or (row.get("depth1_카테고리") or "").strip()
+                  or "-"
+              )
+              name = truncate(row.get("상품명"), 40)
+              top5_lines.append(f"{rank}위. {name} ({category})")
+
+          top10_summary_rows = []
+          for row in top_rows[:10]:
+              rank = (row.get("순위") or "-").strip() or "-"
+              category = (
+                  (row.get("depth2_카테고리") or "").strip()
+                  or (row.get("depth3_카테고리") or "").strip()
+                  or (row.get("depth1_카테고리") or "").strip()
+                  or "-"
+              )
+              name = truncate(row.get("상품명"), 40).replace("|", "\\|")
+              category = category.replace("|", "\\|")
+              price = parse_price(row).replace("|", "\\|")
+              top10_summary_rows.append(f"| {rank} | {category} | {name} | {price} |")
+
+          print(f"hacie_count={len(filtered_rows)}")
+          print("top5_text<<EOF")
+          print("\n".join(top5_lines))
+          print("EOF")
+          print("top10_summary_rows<<EOF")
+          print("\n".join(top10_summary_rows))
+          print("EOF")
+          PY
+
       - name: Generate daily summary
         if: steps.organize.outputs.file_exists == 'true'
         shell: bash
@@ -160,8 +272,8 @@ jobs:
           echo "📄 분석할 CSV 파일: $csv_file"
           echo "📊 CSV 파일 크기: $(wc -l < "$csv_file") 줄"
           
-          # HACIE 상품 개수 계산 (디버깅용)
-          hacie_count=$({ grep -iE "HACIE|하시에" "$csv_file" 2>/dev/null || true; } | wc -l | xargs)
+          # CSV 헤더 기준으로 집계한 HACIE 상품 개수
+          hacie_count="${{ steps.stats.outputs.hacie_count }}"
           echo "📊 발견된 HACIE 상품: ${hacie_count}개"
           
           # 마크다운 파일명: 일일_요약_yyMMdd_hhmmss.md (CSV와 동일한 타임스탬프)
@@ -219,8 +331,7 @@ jobs:
           if git diff --staged --quiet; then
             echo "변경사항이 없습니다."
           else
-            # HACIE 상품 수 계산
-            hacie_count=$({ grep -iE "HACIE|하시에" "$csv_file" 2>/dev/null || true; } | wc -l | xargs)
+            hacie_count="${{ steps.stats.outputs.hacie_count }}"
             
             kst_time=$(date '+%Y년 %m월 %d일 %H:%M:%S')
             
@@ -271,14 +382,14 @@ jobs:
       - name: Create summary
         if: steps.organize.outputs.file_exists == 'true'
         shell: bash
+        env:
+          HACIE_COUNT: ${{ steps.stats.outputs.hacie_count }}
+          TOP10_SUMMARY_ROWS: ${{ steps.stats.outputs.top10_summary_rows }}
         run: |
-          csv_file="${{ steps.organize.outputs.csv_file }}"
           year="${{ steps.organize.outputs.year }}"
           month="${{ steps.organize.outputs.month }}"
           day="${{ steps.organize.outputs.day }}"
           time_suffix="${{ steps.organize.outputs.time_suffix }}"
-          
-          hacie_count=$({ grep -iE "HACIE|하시에" "$csv_file" 2>/dev/null || true; } | wc -l | xargs)
           
           # time_suffix에서 시간 추출 (yyMMdd_HHMMSS -> HH:MM:SS)
           time_part=$(echo "$time_suffix" | cut -d'_' -f2)
@@ -288,27 +399,15 @@ jobs:
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "**날짜:** ${year}년 ${month}월 ${day}일" >> $GITHUB_STEP_SUMMARY
           echo "**시각:** ${formatted_time} KST" >> $GITHUB_STEP_SUMMARY
-          echo "**발견된 HACIE 상품:** ${hacie_count}개" >> $GITHUB_STEP_SUMMARY
+          echo "**발견된 HACIE 상품:** ${HACIE_COUNT}개" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           
-          if [ $hacie_count -gt 0 ]; then
+          if [ "${HACIE_COUNT}" -gt 0 ]; then
             echo "## 📋 상위 10개 상품" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
             echo '| 순위 | 카테고리 | 상품명 | 가격 |' >> $GITHUB_STEP_SUMMARY
             echo '|:----:|---------|--------|-----:|' >> $GITHUB_STEP_SUMMARY
-            
-            { grep -iE "HACIE|하시에" "$csv_file" 2>/dev/null || true; } | head -10 | while IFS=',' read -r date time depth1 depth2 rank name price rest; do
-              name_clean=$(echo "$name" | sed 's/"//g' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
-              price_clean=$(echo "$price" | sed 's/"//g' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
-              rank_clean=$(echo "$rank" | sed 's/"//g' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
-              depth2_clean=$(echo "$depth2" | sed 's/"//g' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
-              
-              if [ ${#name_clean} -gt 40 ]; then
-                name_clean="${name_clean:0:40}..."
-              fi
-              
-              echo "| ${rank_clean} | ${depth2_clean} | ${name_clean} | ${price_clean} |" >> $GITHUB_STEP_SUMMARY
-            done
+            printf '%s\n' "$TOP10_SUMMARY_ROWS" >> $GITHUB_STEP_SUMMARY
           fi
       
       - name: Upload results as artifact
@@ -324,51 +423,17 @@ jobs:
         shell: bash
         env:
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          HACIE_COUNT: ${{ steps.stats.outputs.hacie_count }}
+          TOP5_TEXT: ${{ steps.stats.outputs.top5_text }}
         run: |
-          csv_file="${{ steps.organize.outputs.csv_file }}"
           year="${{ steps.organize.outputs.year }}"
           month="${{ steps.organize.outputs.month }}"
           day="${{ steps.organize.outputs.day }}"
           time_suffix="${{ steps.organize.outputs.time_suffix }}"
           csv_name="${{ steps.organize.outputs.csv_name }}"
           
-          # HACIE 상품 수 계산
-          hacie_count=$({ grep -iE "HACIE|하시에" "$csv_file" 2>/dev/null || true; } | wc -l | xargs)
-          
           # 현재 시각
           kst_time=$(date '+%Y년 %m월 %d일 %H:%M:%S')
-          
-          # 상위 5개 상품 추출 (Slack 메시지용)
-          top5_text=""
-          if [ $hacie_count -gt 0 ]; then
-            top5_text=$(python3 -c "
-          import csv
-          csv_file = '${csv_file}'
-          items = []
-          try:
-              with open(csv_file, 'r', encoding='utf-8') as f:
-                  reader = csv.reader(f)
-                  header = next(reader)
-                  count = 0
-                  for row in reader:
-                      if len(row) < 7:
-                          continue
-                      product_name = row[5] if len(row) > 5 else ''
-                      if 'hacie' not in product_name.lower() and '하시에' not in product_name:
-                          continue
-                      rank = row[4] if len(row) > 4 else '-'
-                      category = row[3] if len(row) > 3 else '-'
-                      if len(product_name) > 40:
-                          product_name = product_name[:40] + '...'
-                      items.append(f'{rank}위. {product_name} ({category})')
-                      count += 1
-                      if count >= 5:
-                          break
-              print('\n'.join(items))
-          except Exception as e:
-              print('데이터 추출 오류')
-          ")
-          fi
           
           # Repository URL
           repo_url="https://github.com/${GITHUB_REPOSITORY}"
@@ -376,92 +441,61 @@ jobs:
           file_url="${repo_url}/tree/master/${file_path}"
           
           # Slack 메시지 생성
-          if [ $hacie_count -gt 0 ]; then
-            status_emoji="✅"
-            status_color="good"
-            summary_text="HACIE 상품 *${hacie_count}개* 발견!"
-          else
-            status_emoji="⚠️"
-            status_color="warning"
-            summary_text="HACIE 상품이 발견되지 않았습니다."
-          fi
-          
-          # JSON payload 생성
-          payload=$(cat <<EOF
-          {
-            "text": "${status_emoji} HACIE 일일 순위 추적 완료",
-            "attachments": [
+          payload=$(YEAR="$year" MONTH="$month" DAY="$day" FILE_URL="$file_url" CSV_NAME="$csv_name" KST_TIME="$kst_time" python3 - <<'PY'
+          import json
+          import os
+          import time
+
+          hacie_count = int(os.environ.get("HACIE_COUNT", "0") or 0)
+          status_emoji = "✅" if hacie_count > 0 else "⚠️"
+          status_color = "good" if hacie_count > 0 else "warning"
+          top5_text = os.environ.get("TOP5_TEXT", "").strip()
+
+          fields = [
               {
-                "color": "${status_color}",
-                "title": "📊 ${year}년 ${month}월 ${day}일 순위 분석",
-                "title_link": "${file_url}",
-                "fields": [
-                  {
-                    "title": "발견 상품",
-                    "value": "${hacie_count}개",
-                    "short": true
-                  },
-                  {
-                    "title": "분석 시각",
-                    "value": "${kst_time} KST",
-                    "short": true
-                  },
-                  {
-                    "title": "데이터 파일",
-                    "value": "\`${csv_name}\`",
-                    "short": false
-                  }
-                ],
-                "footer": "GitHub Actions",
-                "footer_icon": "https://github.githubassets.com/images/modules/logos_page/GitHub-Mark.png",
-                "ts": $(date +%s)
-              }
-            ]
-          }
-          EOF
-          )
-          
-          # 상위 5개 상품이 있으면 추가
-          if [ ! -z "$top5_text" ]; then
-            payload=$(cat <<EOF
-          {
-            "text": "${status_emoji} HACIE 일일 순위 추적 완료",
-            "attachments": [
+                  "title": "발견 상품",
+                  "value": f"{hacie_count}개",
+                  "short": True,
+              },
               {
-                "color": "${status_color}",
-                "title": "📊 ${year}년 ${month}월 ${day}일 순위 분석",
-                "title_link": "${file_url}",
-                "fields": [
+                  "title": "분석 시각",
+                  "value": f"{os.environ['KST_TIME']} KST",
+                  "short": True,
+              },
+              {
+                  "title": "데이터 파일",
+                  "value": f"`{os.environ['CSV_NAME']}`",
+                  "short": False,
+              },
+          ]
+
+          if top5_text:
+              fields.append(
                   {
-                    "title": "발견 상품",
-                    "value": "${hacie_count}개",
-                    "short": true
-                  },
-                  {
-                    "title": "분석 시각",
-                    "value": "${kst_time} KST",
-                    "short": true
-                  },
-                  {
-                    "title": "데이터 파일",
-                    "value": "\`${csv_name}\`",
-                    "short": false
-                  },
-                  {
-                    "title": "🏆 상위 5개 상품",
-                    "value": "${top5_text}",
-                    "short": false
+                      "title": "🏆 상위 5개 상품",
+                      "value": top5_text,
+                      "short": False,
                   }
-                ],
-                "footer": "GitHub Actions",
-                "footer_icon": "https://github.githubassets.com/images/modules/logos_page/GitHub-Mark.png",
-                "ts": $(date +%s)
-              }
-            ]
+              )
+
+          payload = {
+              "text": f"{status_emoji} HACIE 일일 순위 추적 완료",
+              "attachments": [
+                  {
+                      "color": status_color,
+                      "title": f"📊 {os.environ['YEAR']}년 {os.environ['MONTH']}월 {os.environ['DAY']}일 순위 분석",
+                      "title_link": os.environ["FILE_URL"],
+                      "fields": fields,
+                      "footer": "GitHub Actions",
+                      "footer_icon": "https://github.githubassets.com/images/modules/logos_page/GitHub-Mark.png",
+                      "ts": int(time.time()),
+                  }
+              ],
           }
-          EOF
+
+          print(json.dumps(payload, ensure_ascii=False))
+          PY
           )
-          fi
           
           # Slack 웹훅 전송
           echo "📤 Slack 알림 전송 중..."
