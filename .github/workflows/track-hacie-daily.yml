@@ -439,9 +439,12 @@ jobs:
           repo_url="https://github.com/${GITHUB_REPOSITORY}"
           file_path="output/${year}/${month}/${day}"
           file_url="${repo_url}/tree/master/${file_path}"
+          summary_name="일일_요약_${time_suffix}.md"
+          summary_path="${file_path}/${summary_name}"
+          summary_url="${repo_url}/blob/master/${summary_path}"
           
           # Slack 메시지 생성
-          payload=$(YEAR="$year" MONTH="$month" DAY="$day" FILE_URL="$file_url" CSV_NAME="$csv_name" KST_TIME="$kst_time" python3 - <<'PY'
+          payload=$(YEAR="$year" MONTH="$month" DAY="$day" FILE_URL="$file_url" CSV_NAME="$csv_name" KST_TIME="$kst_time" SUMMARY_NAME="$summary_name" SUMMARY_URL="$summary_url" python3 - <<'PY'
           import json
           import os
           import time
@@ -467,6 +470,11 @@ jobs:
                   "value": f"`{os.environ['CSV_NAME']}`",
                   "short": False,
               },
+              {
+                  "title": "일일 요약",
+                  "value": f"<{os.environ['SUMMARY_URL']}|{os.environ['SUMMARY_NAME']}>",
+                  "short": False,
+              },
           ]
 
           if top5_text:
@@ -485,6 +493,7 @@ jobs:
                       "color": status_color,
                       "title": f"📊 {os.environ['YEAR']}년 {os.environ['MONTH']}월 {os.environ['DAY']}일 순위 분석",
                       "title_link": os.environ["FILE_URL"],
+                      "mrkdwn_in": ["fields"],
                       "fields": fields,
                       "footer": "GitHub Actions",
                       "footer_icon": "https://github.githubassets.com/images/modules/logos_page/GitHub-Mark.png",
