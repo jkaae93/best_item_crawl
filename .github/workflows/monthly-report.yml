@@ -43,6 +43,12 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0  # 전체 히스토리 가져오기
+
+      - name: Install Python dependencies
+        if: steps.check_date.outputs.is_first_day == 'true' || github.event_name == 'workflow_dispatch'
+        run: |
+          python3 -m pip install --upgrade pip
+          python3 -m pip install -r requirements.txt
       
       - name: Calculate target month
         if: steps.check_date.outputs.is_first_day == 'true' || github.event_name == 'workflow_dispatch'
@@ -77,7 +83,6 @@ jobs:
         id: generate
         env:
           TZ: Asia/Seoul
-          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
         run: |
           year="${{ steps.calc.outputs.year }}"
           month="${{ steps.calc.outputs.month }}"
@@ -88,19 +93,13 @@ jobs:
           python3 scripts/generate_reports.py monthly ${year} ${month_num}
           
           # 생성된 파일 확인
-          report_file="output/${year}/${month}/${year}년_${month}월_월간통계.md"
+          report_file="output/${year}/${month}/${year}년_${month}월_월간통계.pdf"
           
           if [ -f "$report_file" ]; then
             echo "report_exists=true" >> $GITHUB_OUTPUT
             echo "report_file=${report_file}" >> $GITHUB_OUTPUT
+            echo "report_name=$(basename "$report_file")" >> $GITHUB_OUTPUT
             echo "✓ 월간 리포트 생성 완료: $report_file"
-            
-            # 리포트에서 주요 지표 추출
-            total_products=$(grep -oP '총 발견 상품:\s*\K\d+' "$report_file" || echo "0")
-            avg_per_day=$(grep -oP '일평균 상품 수:\s*\K[\d.]+' "$report_file" || echo "0")
-            
-            echo "total_products=${total_products}" >> $GITHUB_OUTPUT
-            echo "avg_per_day=${avg_per_day}" >> $GITHUB_OUTPUT
           else
             echo "report_exists=false" >> $GITHUB_OUTPUT
             echo "⚠️ 월간 리포트 생성 실패 (데이터 부족 가능성)"
@@ -115,7 +114,7 @@ jobs:
           
           echo "=== 월간 리포트 요약 ==="
           if [ -f "$report_file" ]; then
-            head -50 "$report_file"
+            ls -lh "$report_file"
           else
             echo "⚠️ 리포트 파일이 없습니다: $report_file"
           fi
@@ -130,14 +129,12 @@ jobs:
           
           year="${{ steps.calc.outputs.year }}"
           month="${{ steps.calc.outputs.month }}"
-          total="${{ steps.generate.outputs.total_products }}"
-          avg="${{ steps.generate.outputs.avg_per_day }}"
           
           # 원격 변경사항 가져오기
           git fetch origin master
           git rebase origin/master || git merge origin/master -m "Merge remote changes"
           
-          git add output/${year}/${month}/*월간통계.md
+          git add output/${year}/${month}/*월간통계.pdf
           git add output/${year}/${month}/*월간통계.csv
           
           if git diff --staged --quiet; then
@@ -147,8 +144,6 @@ jobs:
             
             commit_msg="📈 월간 리포트 생성: ${year}년 ${month}월
 
-            - 총 발견 상품: ${total}개
-            - 일평균: ${avg}개
             - 생성 일시: ${kst_date}
             - 자동 생성: GitHub Actions (Monthly Report)"
             
@@ -174,28 +169,80 @@ jobs:
           TZ: Asia/Seoul
         run: |
           report_file="${{ steps.generate.outputs.report_file }}"
+          report_name="${{ steps.generate.outputs.report_name }}"
           year="${{ steps.calc.outputs.year }}"
           month="${{ steps.calc.outputs.month }}"
-          total="${{ steps.generate.outputs.total_products }}"
-          avg="${{ steps.generate.outputs.avg_per_day }}"
+          report_url="https://github.com/${GITHUB_REPOSITORY}/blob/master/${report_file}"
           
           echo "# 📈 HACIE 월간 리포트 생성 완료" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "**리포트 기간:** ${year}년 ${month}월" >> $GITHUB_STEP_SUMMARY
           echo "**생성 시간:** $(date '+%Y-%m-%d %H:%M:%S') KST" >> $GITHUB_STEP_SUMMARY
+          echo "**리포트 파일:** [${report_name}](${report_url})" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "## 📊 주요 지표" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "- **총 발견 상품:** ${total}개" >> $GITHUB_STEP_SUMMARY
-          echo "- **일평균 상품:** ${avg}개" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          
-          if [ -f "$report_file" ]; then
-            echo "## 📋 리포트 미리보기" >> $GITHUB_STEP_SUMMARY
-            echo "" >> $GITHUB_STEP_SUMMARY
-            echo '```' >> $GITHUB_STEP_SUMMARY
-            head -60 "$report_file" >> $GITHUB_STEP_SUMMARY
-            echo '```' >> $GITHUB_STEP_SUMMARY
+
+      - name: Send Slack notification
+        if: (steps.check_date.outputs.is_first_day == 'true' || github.event_name == 'workflow_dispatch') && steps.generate.outputs.report_exists == 'true'
+        env:
+          TZ: Asia/Seoul
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+        run: |
+          year="${{ steps.calc.outputs.year }}"
+          month="${{ steps.calc.outputs.month }}"
+          report_file="${{ steps.generate.outputs.report_file }}"
+          report_name="${{ steps.generate.outputs.report_name }}"
+          report_url="https://github.com/${GITHUB_REPOSITORY}/blob/master/${report_file}"
+          kst_time=$(date '+%Y년 %m월 %d일 %H:%M:%S')
+
+          payload=$(REPORT_URL="$report_url" REPORT_NAME="$report_name" YEAR="$year" MONTH="$month" KST_TIME="$kst_time" python3 - <<'PY'
+          import json
+          import os
+          import time
+
+          payload = {
+              "text": "✅ HACIE 월간 리포트 생성 완료",
+              "attachments": [
+                  {
+                      "color": "good",
+                      "title": f"📈 {os.environ['YEAR']}년 {os.environ['MONTH']}월 월간 리포트",
+                      "title_link": os.environ["REPORT_URL"],
+                      "mrkdwn_in": ["fields"],
+                      "fields": [
+                          {
+                              "title": "리포트 파일",
+                              "value": f"<{os.environ['REPORT_URL']}|{os.environ['REPORT_NAME']}>",
+                              "short": False,
+                          },
+                          {
+                              "title": "생성 시각",
+                              "value": f"{os.environ['KST_TIME']} KST",
+                              "short": False,
+                          },
+                      ],
+                      "footer": "GitHub Actions",
+                      "footer_icon": "https://github.githubassets.com/images/modules/logos_page/GitHub-Mark.png",
+                      "ts": int(time.time()),
+                  }
+              ],
+          }
+
+          print(json.dumps(payload, ensure_ascii=False))
+          PY
+          )
+
+          response=$(curl -X POST \
+            -H 'Content-type: application/json' \
+            --data "$payload" \
+            -w "\n%{http_code}" \
+            -s \
+            "$SLACK_WEBHOOK_URL")
+
+          http_code=$(echo "$response" | tail -n 1)
+          if [ "$http_code" = "200" ]; then
+            echo "✅ Slack 알림 전송 성공!"
+          else
+            echo "⚠️ Slack 알림 전송 실패 (HTTP ${http_code})"
+            echo "Response: $(echo "$response" | head -n -1)"
           fi
       
       - name: Upload report as artifact
@@ -205,4 +252,3 @@ jobs:
           name: monthly-report-${{ steps.calc.outputs.year }}-${{ steps.calc.outputs.month }}
           path: ${{ steps.generate.outputs.report_file }}
           retention-days: 730  # 2년 보관
-

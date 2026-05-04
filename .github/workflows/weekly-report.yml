@@ -29,6 +29,11 @@ jobs:
         with:
           fetch-depth: 0  # 전체 히스토리 가져오기
 
+      - name: Install Python dependencies
+        run: |
+          python3 -m pip install --upgrade pip
+          python3 -m pip install -r requirements.txt
+
       - name: Determine target week
         id: calc
         env:
@@ -62,7 +67,6 @@ jobs:
         id: generate
         env:
           TZ: Asia/Seoul
-          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
         run: |
           year="${{ steps.calc.outputs.year }}"
           month="${{ steps.calc.outputs.month }}"
@@ -72,11 +76,12 @@ jobs:
           export PYTHONPATH="${PYTHONPATH}:${GITHUB_WORKSPACE}"
           python3 scripts/generate_reports.py weekly ${year} ${month_num} ${week_num}
 
-          report_file="output/${year}/${month}/${year}년_${month}월_${week_num}주차_통계.md"
+          report_file="output/${year}/${month}/${year}년_${month}월_${week_num}주차_통계.pdf"
 
           if [ -f "$report_file" ]; then
             echo "report_exists=true" >> $GITHUB_OUTPUT
             echo "report_file=${report_file}" >> $GITHUB_OUTPUT
+            echo "report_name=$(basename "$report_file")" >> $GITHUB_OUTPUT
             echo "✓ 주간 리포트 생성 완료: $report_file"
           else
             echo "report_exists=false" >> $GITHUB_OUTPUT
@@ -92,7 +97,7 @@ jobs:
 
           echo "=== 주간 리포트 요약 ==="
           if [ -f "$report_file" ]; then
-            head -30 "$report_file"
+            ls -lh "$report_file"
           else
             echo "⚠️ 리포트 파일이 없습니다: $report_file"
           fi
@@ -112,7 +117,7 @@ jobs:
           git fetch origin master
           git rebase origin/master || git merge origin/master -m "Merge remote changes"
 
-          git add output/${year}/${month}/*주차_통계.md
+          git add output/${year}/${month}/*주차_통계.pdf
           git add output/${year}/${month}/*주차_통계.csv
 
           if git diff --staged --quiet; then
@@ -147,22 +152,82 @@ jobs:
           TZ: Asia/Seoul
         run: |
           report_file="${{ steps.generate.outputs.report_file }}"
+          report_name="${{ steps.generate.outputs.report_name }}"
           year="${{ steps.calc.outputs.year }}"
           month="${{ steps.calc.outputs.month }}"
           week_num="${{ steps.calc.outputs.week_num }}"
+          report_url="https://github.com/${GITHUB_REPOSITORY}/blob/master/${report_file}"
 
           echo "# 📊 HACIE 주간 리포트 생성 완료" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "**리포트 기간:** ${year}년 ${month}월 ${week_num}주차" >> $GITHUB_STEP_SUMMARY
           echo "**생성 시간:** $(date '+%Y-%m-%d %H:%M:%S') KST" >> $GITHUB_STEP_SUMMARY
+          echo "**리포트 파일:** [${report_name}](${report_url})" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
 
-          if [ -f "$report_file" ]; then
-            echo "## 📋 리포트 미리보기" >> $GITHUB_STEP_SUMMARY
-            echo "" >> $GITHUB_STEP_SUMMARY
-            echo '```' >> $GITHUB_STEP_SUMMARY
-            head -40 "$report_file" >> $GITHUB_STEP_SUMMARY
-            echo '```' >> $GITHUB_STEP_SUMMARY
+      - name: Send Slack notification
+        if: steps.generate.outputs.report_exists == 'true'
+        env:
+          TZ: Asia/Seoul
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+        run: |
+          year="${{ steps.calc.outputs.year }}"
+          month="${{ steps.calc.outputs.month }}"
+          week_num="${{ steps.calc.outputs.week_num }}"
+          report_file="${{ steps.generate.outputs.report_file }}"
+          report_name="${{ steps.generate.outputs.report_name }}"
+          report_url="https://github.com/${GITHUB_REPOSITORY}/blob/master/${report_file}"
+          kst_time=$(date '+%Y년 %m월 %d일 %H:%M:%S')
+
+          payload=$(REPORT_URL="$report_url" REPORT_NAME="$report_name" YEAR="$year" MONTH="$month" WEEK_NUM="$week_num" KST_TIME="$kst_time" python3 - <<'PY'
+          import json
+          import os
+          import time
+
+          payload = {
+              "text": "✅ HACIE 주간 리포트 생성 완료",
+              "attachments": [
+                  {
+                      "color": "good",
+                      "title": f"📊 {os.environ['YEAR']}년 {os.environ['MONTH']}월 {os.environ['WEEK_NUM']}주차 리포트",
+                      "title_link": os.environ["REPORT_URL"],
+                      "mrkdwn_in": ["fields"],
+                      "fields": [
+                          {
+                              "title": "리포트 파일",
+                              "value": f"<{os.environ['REPORT_URL']}|{os.environ['REPORT_NAME']}>",
+                              "short": False,
+                          },
+                          {
+                              "title": "생성 시각",
+                              "value": f"{os.environ['KST_TIME']} KST",
+                              "short": False,
+                          },
+                      ],
+                      "footer": "GitHub Actions",
+                      "footer_icon": "https://github.githubassets.com/images/modules/logos_page/GitHub-Mark.png",
+                      "ts": int(time.time()),
+                  }
+              ],
+          }
+
+          print(json.dumps(payload, ensure_ascii=False))
+          PY
+          )
+
+          response=$(curl -X POST \
+            -H 'Content-type: application/json' \
+            --data "$payload" \
+            -w "\n%{http_code}" \
+            -s \
+            "$SLACK_WEBHOOK_URL")
+
+          http_code=$(echo "$response" | tail -n 1)
+          if [ "$http_code" = "200" ]; then
+            echo "✅ Slack 알림 전송 성공!"
+          else
+            echo "⚠️ Slack 알림 전송 실패 (HTTP ${http_code})"
+            echo "Response: $(echo "$response" | head -n -1)"
           fi
 
       - name: Upload report as artifact
@@ -172,4 +237,3 @@ jobs:
           name: weekly-report-${{ steps.calc.outputs.year }}-${{ steps.calc.outputs.month }}-week${{ steps.calc.outputs.week_num }}
           path: ${{ steps.generate.outputs.report_file }}
           retention-days: 365
-

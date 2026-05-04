@@ -253,8 +253,6 @@ jobs:
       - name: Generate daily summary
         if: steps.organize.outputs.file_exists == 'true'
         shell: bash
-        env:
-          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
         run: |
           csv_file="${{ steps.organize.outputs.csv_file }}"
           year="${{ steps.organize.outputs.year }}"
@@ -276,8 +274,8 @@ jobs:
           hacie_count="${{ steps.stats.outputs.hacie_count }}"
           echo "📊 발견된 HACIE 상품: ${hacie_count}개"
           
-          # 마크다운 파일명: 일일_요약_yyMMdd_hhmmss.md (CSV와 동일한 타임스탬프)
-          summary_file="output/${year}/${month}/${day}/일일_요약_${time_suffix}.md"
+          # PDF 파일명: 일일_요약_yyMMdd_hhmmss.pdf (CSV와 동일한 타임스탬프)
+          summary_file="output/${year}/${month}/${day}/일일_요약_${time_suffix}.pdf"
           
           # generate_reports.py를 사용하여 리포트 생성
           echo "📝 generate_reports.py를 사용하여 일일 리포트 생성 중..."
@@ -286,13 +284,7 @@ jobs:
           if [ $? -eq 0 ]; then
             echo "✅ 일일 요약 생성 완료: $summary_file"
             echo "⏰ 타임스탬프: ${time_suffix}"
-            
-            # 생성된 마크다운 파일 미리보기
-            echo ""
-            echo "📄 마크다운 내용 미리보기:"
-            head -30 "$summary_file"
-            echo ""
-            echo "... (중략) ..."
+            ls -lh "$summary_file"
           else
             echo "❌ 일일 리포트 생성 실패"
             exit 1
@@ -439,7 +431,7 @@ jobs:
           repo_url="https://github.com/${GITHUB_REPOSITORY}"
           file_path="output/${year}/${month}/${day}"
           file_url="${repo_url}/tree/master/${file_path}"
-          summary_name="일일_요약_${time_suffix}.md"
+          summary_name="일일_요약_${time_suffix}.pdf"
           summary_path="${file_path}/${summary_name}"
           summary_url="${repo_url}/blob/master/${summary_path}"
           

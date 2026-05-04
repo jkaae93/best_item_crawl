@@ -12,8 +12,33 @@ from datetime import datetime, timedelta, date
 from typing import List, Dict, Optional
 from collections import defaultdict
 import statistics
+from html import escape
+from urllib.parse import quote
 from zoneinfo import ZoneInfo
 import requests
+
+try:
+    from reportlab.lib import colors
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
+    from reportlab.lib.units import mm
+    from reportlab.pdfbase import pdfmetrics
+    from reportlab.pdfbase.cidfonts import UnicodeCIDFont
+    from reportlab.platypus import Paragraph, Preformatted, SimpleDocTemplate, Spacer, Table, TableStyle
+except ImportError:
+    colors = None
+    A4 = None
+    ParagraphStyle = None
+    getSampleStyleSheet = None
+    mm = None
+    pdfmetrics = None
+    UnicodeCIDFont = None
+    Paragraph = None
+    Preformatted = None
+    SimpleDocTemplate = None
+    Spacer = None
+    Table = None
+    TableStyle = None
 
 
 class HacieReportGenerator:
@@ -24,6 +49,7 @@ class HacieReportGenerator:
             output_dir = Path(__file__).parent.parent / 'output'
         self.output_dir = output_dir
         self.slack_webhook_url = slack_webhook_url or os.getenv('SLACK_WEBHOOK_URL')
+        self.github_repository = os.getenv('GITHUB_REPOSITORY', 'jkaae93/best_item_crawl')
     
     def send_slack_notification(self, message: str, is_error: bool = False) -> bool:
         """슬랙 알림 전송"""
@@ -39,6 +65,7 @@ class HacieReportGenerator:
                 "attachments": [{
                     "color": color,
                     "text": f"{emoji} {message}",
+                    "mrkdwn_in": ["text"],
                     "footer": "HACIE 리포트 시스템",
                     "ts": int(datetime.now(ZoneInfo("Asia/Seoul")).timestamp())
                 }]
@@ -267,15 +294,32 @@ class HacieReportGenerator:
             relative = f"./{relative}"
         return relative
 
+    def _github_blob_url(self, target_path: Optional[Path]) -> Optional[str]:
+        """출력 디렉터리 기준 GitHub blob URL 생성"""
+        if not target_path:
+            return None
+
+        path = target_path
+        if not path.is_absolute():
+            path = self.output_dir / path
+
+        try:
+            relative = path.relative_to(self.output_dir)
+        except ValueError:
+            return None
+
+        encoded = quote(relative.as_posix(), safe='/')
+        return f"https://github.com/{self.github_repository}/blob/master/output/{encoded}"
+
     def _format_link(self, label: str, target_path: Optional[Path], current_dir: Path) -> str:
         """마크다운 링크 생성"""
-        relative = self._relative_path_string(target_path, current_dir)
-        if not relative:
+        url = self._github_blob_url(target_path)
+        if not url:
             return "-"
-        return f"[{label}]({relative})"
+        return f"[{label}]({url})"
 
-    def _resolve_daily_markdown_path(self, source_csv: Optional[str]) -> Optional[Path]:
-        """CSV 파일 경로에서 일일 리포트 마크다운 경로 추정"""
+    def _resolve_daily_report_path(self, source_csv: Optional[str]) -> Optional[Path]:
+        """CSV 파일 경로에서 일일 리포트 PDF 경로 추정"""
         if not source_csv:
             return None
 
@@ -283,14 +327,304 @@ class HacieReportGenerator:
         if not csv_path.is_absolute():
             csv_path = self.output_dir / csv_path
 
-        md_name = csv_path.name.replace('wconcept_best_', '일일_요약_').replace('.csv', '.md')
-        return csv_path.parent / md_name
+        pdf_name = csv_path.name.replace('wconcept_best_', '일일_요약_').replace('.csv', '.pdf')
+        return csv_path.parent / pdf_name
 
-    def _resolve_weekly_markdown_path(self, year: int, month: int, week_num: int) -> Path:
-        """주간 리포트 마크다운 경로 추정"""
+    def _resolve_weekly_report_path(self, year: int, month: int, week_num: int) -> Path:
+        """주간 리포트 PDF 경로 추정"""
         base_dir = self.output_dir / str(year) / f"{month:02d}"
-        filename = f"{year}년_{month:02d}월_{week_num}주차_통계.md"
+        filename = f"{year}년_{month:02d}월_{week_num}주차_통계.pdf"
         return base_dir / filename
+
+    def _ensure_pdf_support(self) -> str:
+        """PDF 생성에 필요한 글꼴 및 라이브러리 준비"""
+        if not all([A4, ParagraphStyle, getSampleStyleSheet, mm, pdfmetrics, UnicodeCIDFont, Paragraph, Preformatted, SimpleDocTemplate, Spacer, Table, TableStyle, colors]):
+            raise RuntimeError("PDF 생성을 위해 reportlab 설치가 필요합니다.")
+
+        font_name = 'HYSMyeongJo-Medium'
+        if font_name not in pdfmetrics.getRegisteredFontNames():
+            pdfmetrics.registerFont(UnicodeCIDFont(font_name))
+        return font_name
+
+    def _build_pdf_styles(self, font_name: str) -> Dict[str, ParagraphStyle]:
+        """PDF 렌더링용 스타일 생성"""
+        styles = getSampleStyleSheet()
+        return {
+            'h1': ParagraphStyle(
+                'HacieHeading1',
+                parent=styles['Heading1'],
+                fontName=font_name,
+                fontSize=18,
+                leading=24,
+                spaceAfter=10,
+            ),
+            'h2': ParagraphStyle(
+                'HacieHeading2',
+                parent=styles['Heading2'],
+                fontName=font_name,
+                fontSize=14,
+                leading=20,
+                spaceAfter=8,
+            ),
+            'h3': ParagraphStyle(
+                'HacieHeading3',
+                parent=styles['Heading3'],
+                fontName=font_name,
+                fontSize=12,
+                leading=17,
+                spaceAfter=6,
+            ),
+            'body': ParagraphStyle(
+                'HacieBody',
+                parent=styles['BodyText'],
+                fontName=font_name,
+                fontSize=9.5,
+                leading=15,
+                spaceAfter=3,
+            ),
+            'bullet': ParagraphStyle(
+                'HacieBullet',
+                parent=styles['BodyText'],
+                fontName=font_name,
+                fontSize=9.5,
+                leading=15,
+                leftIndent=12,
+                firstLineIndent=0,
+                spaceAfter=2,
+            ),
+            'code': ParagraphStyle(
+                'HacieCode',
+                parent=styles['Code'],
+                fontName=font_name,
+                fontSize=8.5,
+                leading=12,
+                leftIndent=6,
+                rightIndent=6,
+                spaceAfter=6,
+            ),
+            'table': ParagraphStyle(
+                'HacieTable',
+                parent=styles['BodyText'],
+                fontName=font_name,
+                fontSize=8.5,
+                leading=11,
+            ),
+        }
+
+    def _convert_inline_markdown(self, text: str) -> str:
+        """마크다운 일부를 ReportLab paragraph markup으로 변환"""
+        text = (text or '').strip()
+        if not text:
+            return ""
+
+        text = text.replace('<br>', '\n').replace('<br/>', '\n')
+        text = text.replace('<details>', '').replace('</details>', '')
+        text = re.sub(r'<summary>(.*?)</summary>', r'\1', text)
+
+        placeholders: Dict[str, str] = {}
+
+        def store(value: str) -> str:
+            token = f"@@PLACEHOLDER_{len(placeholders)}@@"
+            placeholders[token] = value
+            return token
+
+        def replace_link(match: re.Match[str]) -> str:
+            label = escape(match.group(1))
+            href = escape(match.group(2).strip(), quote=True)
+            return store(f'<link href="{href}" color="blue">{label}</link>')
+
+        rendered = re.sub(r'\[([^\]]+)\]\(([^)]+)\)', replace_link, text)
+        rendered = escape(rendered)
+        rendered = re.sub(r'\*\*(.+?)\*\*', r'\1', rendered)
+        rendered = re.sub(r'`([^`]+)`', r'\1', rendered)
+        rendered = re.sub(r'(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)', r'\1', rendered)
+        rendered = rendered.replace('\n', '<br/>')
+
+        for token, value in placeholders.items():
+            rendered = rendered.replace(token, value)
+
+        return rendered
+
+    @staticmethod
+    def _split_markdown_table_row(line: str) -> List[str]:
+        """파이프 구분 마크다운 테이블 행 파싱"""
+        stripped = line.strip().strip('|')
+        cells: List[str] = []
+        current: List[str] = []
+        escaped = False
+
+        for char in stripped:
+            if escaped:
+                current.append(char)
+                escaped = False
+                continue
+
+            if char == '\\':
+                escaped = True
+                continue
+
+            if char == '|':
+                cells.append(''.join(current).strip())
+                current = []
+                continue
+
+            current.append(char)
+
+        cells.append(''.join(current).strip())
+        return cells
+
+    def _append_table_block(self, table_lines: List[str], story: List, styles: Dict[str, ParagraphStyle], font_name: str) -> None:
+        """마크다운 테이블을 PDF 테이블로 변환"""
+        rows = [self._split_markdown_table_row(line) for line in table_lines if line.strip()]
+        if not rows:
+            return
+
+        cleaned_rows: List[List[str]] = []
+        for index, row in enumerate(rows):
+            normalized = [cell.replace(' ', '') for cell in row]
+            is_alignment_row = index == 1 and normalized and all(re.fullmatch(r':?-{3,}:?', cell or '---') for cell in normalized)
+            if is_alignment_row:
+                continue
+            cleaned_rows.append(row)
+
+        if not cleaned_rows:
+            return
+
+        column_count = max(len(row) for row in cleaned_rows)
+        table_data = []
+
+        for row in cleaned_rows:
+            padded = row + [''] * (column_count - len(row))
+            table_data.append([
+                Paragraph(self._convert_inline_markdown(cell), styles['table'])
+                for cell in padded
+            ])
+
+        table = Table(table_data, repeatRows=1)
+        table.setStyle(TableStyle([
+            ('FONTNAME', (0, 0), (-1, -1), font_name),
+            ('FONTSIZE', (0, 0), (-1, -1), 8.5),
+            ('LEADING', (0, 0), (-1, -1), 11),
+            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#F2F4F7')),
+            ('TEXTCOLOR', (0, 0), (-1, 0), colors.HexColor('#111827')),
+            ('GRID', (0, 0), (-1, -1), 0.3, colors.HexColor('#D0D5DD')),
+            ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+            ('LEFTPADDING', (0, 0), (-1, -1), 5),
+            ('RIGHTPADDING', (0, 0), (-1, -1), 5),
+            ('TOPPADDING', (0, 0), (-1, -1), 4),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
+        ]))
+        story.append(table)
+
+    def _append_markdown_to_story(self, markdown_text: str, story: List, styles: Dict[str, ParagraphStyle], font_name: str) -> None:
+        """마크다운 문자열을 PDF story로 변환"""
+        lines = markdown_text.splitlines()
+        index = 0
+
+        while index < len(lines):
+            raw_line = lines[index].rstrip()
+            stripped = raw_line.strip()
+
+            if not stripped:
+                story.append(Spacer(1, 4))
+                index += 1
+                continue
+
+            if stripped == '---':
+                story.append(Spacer(1, 8))
+                index += 1
+                continue
+
+            if stripped.startswith('```'):
+                code_lines: List[str] = []
+                index += 1
+                while index < len(lines) and not lines[index].strip().startswith('```'):
+                    code_lines.append(lines[index].rstrip())
+                    index += 1
+                story.append(Preformatted('\n'.join(code_lines), styles['code']))
+                story.append(Spacer(1, 6))
+                index += 1
+                continue
+
+            if stripped.startswith('|'):
+                table_lines: List[str] = []
+                while index < len(lines) and lines[index].strip().startswith('|'):
+                    table_lines.append(lines[index].rstrip())
+                    index += 1
+                self._append_table_block(table_lines, story, styles, font_name)
+                story.append(Spacer(1, 8))
+                continue
+
+            if stripped.startswith('# '):
+                story.append(Paragraph(self._convert_inline_markdown(stripped[2:]), styles['h1']))
+                index += 1
+                continue
+
+            if stripped.startswith('## '):
+                story.append(Paragraph(self._convert_inline_markdown(stripped[3:]), styles['h2']))
+                index += 1
+                continue
+
+            if stripped.startswith('### '):
+                story.append(Paragraph(self._convert_inline_markdown(stripped[4:]), styles['h3']))
+                index += 1
+                continue
+
+            if stripped.startswith('<summary>'):
+                summary_text = re.sub(r'</?summary>', '', stripped)
+                story.append(Paragraph(self._convert_inline_markdown(summary_text), styles['h3']))
+                index += 1
+                continue
+
+            if stripped.startswith('<details') or stripped == '</details>':
+                index += 1
+                continue
+
+            if stripped.startswith('- '):
+                story.append(Paragraph(self._convert_inline_markdown(stripped[2:]), styles['bullet'], bulletText='•'))
+                index += 1
+                continue
+
+            paragraph_lines = [stripped]
+            index += 1
+            while index < len(lines):
+                next_line = lines[index].rstrip()
+                next_stripped = next_line.strip()
+                if (
+                    not next_stripped
+                    or next_stripped == '---'
+                    or next_stripped.startswith('```')
+                    or next_stripped.startswith('|')
+                    or next_stripped.startswith('#')
+                    or next_stripped.startswith('- ')
+                    or next_stripped.startswith('<details')
+                    or next_stripped.startswith('<summary>')
+                ):
+                    break
+                paragraph_lines.append(next_stripped)
+                index += 1
+
+            story.append(Paragraph(self._convert_inline_markdown(' '.join(paragraph_lines)), styles['body']))
+
+    def write_pdf_report(self, markdown_text: str, output_path: Path) -> None:
+        """마크다운 문자열을 PDF로 저장"""
+        font_name = self._ensure_pdf_support()
+        styles = self._build_pdf_styles(font_name)
+
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        document = SimpleDocTemplate(
+            str(output_path),
+            pagesize=A4,
+            leftMargin=14 * mm,
+            rightMargin=14 * mm,
+            topMargin=16 * mm,
+            bottomMargin=16 * mm,
+            title=output_path.stem,
+        )
+
+        story: List = []
+        self._append_markdown_to_story(markdown_text, story, styles, font_name)
+        document.build(story)
 
     def _price_display_from_entry(self, entry: Dict) -> str:
         """집계된 상품 정보에서 표시용 가격 문자열 산출"""
@@ -492,8 +826,7 @@ class HacieReportGenerator:
             daily_stats[file_date] = len(products)
 
             # GitHub 링크 생성
-            relative_path = csv_file.relative_to(self.output_dir)
-            github_link = f"https://github.com/kaae/best_item_crawl/blob/master/output/{relative_path}"
+            github_link = self._github_blob_url(csv_file)
             file_links.append((file_date, csv_file.name, github_link))
         
         # 통계 계산
@@ -598,8 +931,8 @@ class HacieReportGenerator:
             heart_str = f"{heart_count}" if heart_count and heart_count > 0 else "-"
             score_str = f"{review_score:.1f}" if review_score and review_score > 0 else "-"
             
-            daily_md_path = self._resolve_daily_markdown_path(product.get('best_source_csv'))
-            link_markdown = self._format_link('일일 리포트', daily_md_path, report_dir)
+            daily_report_path = self._resolve_daily_report_path(product.get('best_source_csv'))
+            link_markdown = self._format_link('일일 리포트', daily_report_path, report_dir)
 
             report += f"| {idx} | {best_rank_text} | {best_date_text} | {name} | {category} | {price_str} | {discount_text} | {sale_tag} | {review_str} | {heart_str} | {score_str} | {link_markdown} |\n"
         
@@ -704,8 +1037,8 @@ class HacieReportGenerator:
             best_rank = product.get('best_rank')
             best_date_text = self._format_date_label(product.get('best_rank_date'))
             discount_value = self._resolve_entry_discount(product)
-            daily_md_path = self._resolve_daily_markdown_path(product.get('best_source_csv'))
-            link_path = self._relative_path_string(daily_md_path, report_dir) or ''
+            daily_report_path = self._resolve_daily_report_path(product.get('best_source_csv'))
+            link_path = self._relative_path_string(daily_report_path, report_dir) or ''
 
             csv_data.append({
                 '유형': f'TOP{idx}',
@@ -763,8 +1096,7 @@ class HacieReportGenerator:
         
         # GitHub 링크 생성
         try:
-            relative_path = csv_file_path.relative_to(self.output_dir)
-            github_link = f"https://github.com/kaae/best_item_crawl/blob/master/output/{relative_path}"
+            github_link = self._github_blob_url(csv_file_path)
         except:
             github_link = None
         
@@ -966,8 +1298,7 @@ class HacieReportGenerator:
             daily_stats[file_date] = len(products)
             
             # GitHub 링크 생성
-            relative_path = csv_file.relative_to(self.output_dir)
-            github_link = f"https://github.com/kaae/best_item_crawl/blob/master/output/{relative_path}"
+            github_link = self._github_blob_url(csv_file)
             file_links.append((file_date, csv_file.name, github_link))
         
         # 통계 계산
@@ -1156,8 +1487,8 @@ class HacieReportGenerator:
             heart_str = f"{heart_count}" if heart_count and heart_count > 0 else "-"
             score_str = f"{review_score:.1f}" if review_score and review_score > 0 else "-"
             
-            daily_md_path = self._resolve_daily_markdown_path(product.get('best_source_csv'))
-            link_markdown = self._format_link('일일 리포트', daily_md_path, report_dir)
+            daily_report_path = self._resolve_daily_report_path(product.get('best_source_csv'))
+            link_markdown = self._format_link('일일 리포트', daily_report_path, report_dir)
 
             report += f"| {idx} | {best_rank_text} | {best_date_text} | {name} | {category} | {price_str} | {discount_text} | {sale_tag} | {review_str} | {heart_str} | {score_str} | {link_markdown} |\n"
         
@@ -1175,8 +1506,8 @@ class HacieReportGenerator:
                 if not week_products:
                     continue
 
-                weekly_md_path = self._resolve_weekly_markdown_path(year, month, week_index)
-                weekly_link = self._format_link('주간 리포트', weekly_md_path, report_dir)
+                weekly_report_path = self._resolve_weekly_report_path(year, month, week_index)
+                weekly_link = self._format_link('주간 리포트', weekly_report_path, report_dir)
 
                 report += f"""
 ### {week_index}주차 베스트 5
@@ -1367,8 +1698,8 @@ class HacieReportGenerator:
             best_date_text = self._format_date_label(product.get('best_rank_date'))
             price_value = self._price_value_from_entry(product)
             discount_value = self._resolve_entry_discount(product)
-            daily_md_path = self._resolve_daily_markdown_path(product.get('best_source_csv'))
-            link_path = self._relative_path_string(daily_md_path, report_dir) or ''
+            daily_report_path = self._resolve_daily_report_path(product.get('best_source_csv'))
+            link_path = self._relative_path_string(daily_report_path, report_dir) or ''
             
             csv_data.append({
                 '유형': f'TOP{idx}',
@@ -1397,8 +1728,8 @@ class HacieReportGenerator:
                 key=lambda x: (x['best_rank'], x['best_rank_date'] or date.max)
             )[:5]
 
-            weekly_md_path = self._resolve_weekly_markdown_path(year, month, week_index)
-            weekly_link_path = self._relative_path_string(weekly_md_path, report_dir) or ''
+            weekly_report_path = self._resolve_weekly_report_path(year, month, week_index)
+            weekly_link_path = self._relative_path_string(weekly_report_path, report_dir) or ''
 
             for idx, week_product in enumerate(week_products, 1):
                 depth1 = week_product.get('category_depth1') or ''
@@ -1490,10 +1821,9 @@ def main():
                 # 출력 디렉토리 생성
                 output_file_path.parent.mkdir(parents=True, exist_ok=True)
                 
-                # 마크다운 저장
-                with open(output_file_path, 'w', encoding='utf-8') as f:
-                    f.write(result['markdown'])
-                print(f"✓ 일일 리포트 생성 완료: {output_file_path}")
+                # PDF 저장
+                generator.write_pdf_report(result['markdown'], output_file_path)
+                print(f"✓ 일일 리포트(PDF) 생성 완료: {output_file_path}")
                 
                 # 성공 알림
                 # 파일명에서 날짜 추출 (wconcept_best_251110_082030.csv)
@@ -1540,11 +1870,10 @@ def main():
                 
                 base_filename = f"{year}년_{month:02d}월_{week}주차_통계"
                 
-                # 마크다운 저장
-                md_file = output_dir / f"{base_filename}.md"
-                with open(md_file, 'w', encoding='utf-8') as f:
-                    f.write(result['markdown'])
-                print(f"✓ 주간 리포트(MD) 생성: {md_file}")
+                # PDF 저장
+                pdf_file = output_dir / f"{base_filename}.pdf"
+                generator.write_pdf_report(result['markdown'], pdf_file)
+                print(f"✓ 주간 리포트(PDF) 생성: {pdf_file}")
                 
                 # CSV 저장
                 csv_file = output_dir / f"{base_filename}.csv"
@@ -1582,11 +1911,10 @@ def main():
                 
                 base_filename = f"{year}년_{month:02d}월_월간통계"
                 
-                # 마크다운 저장
-                md_file = output_dir / f"{base_filename}.md"
-                with open(md_file, 'w', encoding='utf-8') as f:
-                    f.write(result['markdown'])
-                print(f"✓ 월간 리포트(MD) 생성: {md_file}")
+                # PDF 저장
+                pdf_file = output_dir / f"{base_filename}.pdf"
+                generator.write_pdf_report(result['markdown'], pdf_file)
+                print(f"✓ 월간 리포트(PDF) 생성: {pdf_file}")
                 
                 # CSV 저장
                 csv_file = output_dir / f"{base_filename}.csv"
@@ -1613,4 +1941,3 @@ def main():
 
 if __name__ == '__main__':
     main()
-
