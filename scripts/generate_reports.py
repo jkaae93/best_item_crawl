@@ -24,6 +24,7 @@ try:
     from reportlab.lib.units import mm
     from reportlab.pdfbase import pdfmetrics
     from reportlab.pdfbase.cidfonts import UnicodeCIDFont
+    from reportlab.pdfbase.ttfonts import TTFont
     from reportlab.platypus import Paragraph, Preformatted, SimpleDocTemplate, Spacer, Table, TableStyle
 except ImportError:
     colors = None
@@ -33,6 +34,7 @@ except ImportError:
     mm = None
     pdfmetrics = None
     UnicodeCIDFont = None
+    TTFont = None
     Paragraph = None
     Preformatted = None
     SimpleDocTemplate = None
@@ -341,10 +343,53 @@ class HacieReportGenerator:
         if not all([A4, ParagraphStyle, getSampleStyleSheet, mm, pdfmetrics, UnicodeCIDFont, Paragraph, Preformatted, SimpleDocTemplate, Spacer, Table, TableStyle, colors]):
             raise RuntimeError("PDF 생성을 위해 reportlab 설치가 필요합니다.")
 
-        font_name = 'HYSMyeongJo-Medium'
-        if font_name not in pdfmetrics.getRegisteredFontNames():
-            pdfmetrics.registerFont(UnicodeCIDFont(font_name))
-        return font_name
+        # 한국어가 깨지지 않도록 임베딩 가능한 TTF 폰트를 우선 사용
+        pretendard_name = 'Pretendard'
+        pretendard_candidates = [
+            '/usr/share/fonts/truetype/pretendard/Pretendard-Regular.ttf',
+            '/usr/local/share/fonts/Pretendard-Regular.ttf',
+            str(Path.home() / '.fonts' / 'Pretendard-Regular.ttf'),
+            str(Path(__file__).parent.parent / 'output' / 'fonts' / 'Pretendard-Regular.ttf'),
+            '/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc',
+            '/usr/share/fonts/truetype/nanum/NanumGothic.ttf',
+        ]
+
+        if pretendard_name in pdfmetrics.getRegisteredFontNames():
+            return pretendard_name
+
+        if TTFont:
+            for font_path in pretendard_candidates:
+                if Path(font_path).exists():
+                    pdfmetrics.registerFont(TTFont(pretendard_name, font_path))
+                    return pretendard_name
+
+            # 시스템에 폰트가 없으면 Pretendard 정식 배포본 다운로드 후 사용
+            download_url = "https://github.com/orioncactus/pretendard/releases/latest/download/Pretendard-1.3.9.zip"
+            font_output_dir = Path(__file__).parent.parent / 'output' / 'fonts'
+            zip_path = font_output_dir / 'Pretendard.zip'
+            ttf_path = font_output_dir / 'Pretendard-Regular.ttf'
+            try:
+                font_output_dir.mkdir(parents=True, exist_ok=True)
+                response = requests.get(download_url, timeout=20)
+                response.raise_for_status()
+                zip_path.write_bytes(response.content)
+                import zipfile
+                with zipfile.ZipFile(zip_path) as zf:
+                    for member in zf.namelist():
+                        if member.endswith('public/static/Pretendard-Regular.ttf'):
+                            with zf.open(member) as src, open(ttf_path, 'wb') as dst:
+                                dst.write(src.read())
+                            break
+                if ttf_path.exists():
+                    pdfmetrics.registerFont(TTFont(pretendard_name, str(ttf_path)))
+                    return pretendard_name
+            except Exception:
+                pass
+
+        fallback_font_name = 'HYSMyeongJo-Medium'
+        if fallback_font_name not in pdfmetrics.getRegisteredFontNames():
+            pdfmetrics.registerFont(UnicodeCIDFont(fallback_font_name))
+        return fallback_font_name
 
     def _build_pdf_styles(self, font_name: str) -> Dict[str, ParagraphStyle]:
         """PDF 렌더링용 스타일 생성"""
@@ -625,6 +670,34 @@ class HacieReportGenerator:
         story: List = []
         self._append_markdown_to_story(markdown_text, story, styles, font_name)
         document.build(story)
+
+    def build_daily_slack_message(self, products: List[Dict], pdf_path: Path, report_date_text: str) -> str:
+        """일일 리포트용 슬랙 메시지 생성"""
+        grouped = defaultdict(list)
+        for product in products:
+            category = product.get('depth2_카테고리') or product.get('depth2_name') or '기타'
+            grouped[category].append(product)
+
+        lines = [
+            f"일일 리포트 생성 완료 ({report_date_text})",
+            f"총 {len(products)}개의 상품",
+        ]
+
+        for category in sorted(grouped.keys()):
+            lines.append(f"[{category}]")
+            for product in grouped[category]:
+                rank = product.get('순위') or product.get('rank', '-')
+                name = product.get('상품명') or product.get('productName', 'N/A')
+                url = product.get('상품URL') or product.get('productUrl', '')
+                if url and str(url).startswith('http'):
+                    lines.append(f"{rank} / <{url}|{name}>")
+                else:
+                    lines.append(f"{rank} / {name}")
+            lines.append("")
+
+        pdf_link = self._github_blob_url(pdf_path)
+        lines.append(f"PDF 링크: {pdf_link if pdf_link else str(pdf_path)}")
+        return "\n".join(lines)
 
     def _price_display_from_entry(self, entry: Dict) -> str:
         """집계된 상품 정보에서 표시용 가격 문자열 산출"""
@@ -1771,7 +1844,8 @@ class HacieReportGenerator:
         
         return {
             'markdown': report,
-            'csv': csv_content
+            'csv': csv_content,
+            'products': products,
         }
 
 
@@ -1835,12 +1909,17 @@ def main():
                         year_short = date_part[:2]
                         month = date_part[2:4]
                         day = date_part[4:6]
-                        success_msg = f"일일 리포트 생성 완료\n날짜: 20{year_short}년 {month}월 {day}일"
+                        report_date_text = f"20{year_short}년 {month}월 {day}일"
                     else:
-                        success_msg = f"일일 리포트 생성 완료\n파일: {file_basename}"
+                        report_date_text = file_basename
                 else:
-                    success_msg = f"일일 리포트 생성 완료\n파일: {file_basename}"
-                
+                    report_date_text = file_basename
+
+                success_msg = generator.build_daily_slack_message(
+                    result.get('products', []),
+                    output_file_path,
+                    report_date_text
+                )
                 generator.send_slack_notification(success_msg, is_error=False)
             else:
                 error_msg = f"일일 리포트 생성 실패\n파일: {csv_file_path.name}\n원인: 데이터가 없거나 파싱 실패"
