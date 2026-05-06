@@ -328,12 +328,16 @@ class HacieReportGenerator:
 
         path = target_path
         if not path.is_absolute():
-            path = self.output_dir / path
+            output_dir_name = self.output_dir.name
+            if path.parts and path.parts[0] == output_dir_name:
+                path = Path(*path.parts[1:])
+            else:
+                path = self.output_dir / path
 
         try:
             relative = path.relative_to(self.output_dir)
         except ValueError:
-            return None
+            relative = path
 
         encoded = quote(relative.as_posix(), safe='/')
         return f"https://github.com/{self.github_repository}/blob/master/output/{encoded}"
@@ -346,7 +350,7 @@ class HacieReportGenerator:
         return f"[{label}]({url})"
 
     def _resolve_daily_report_path(self, source_csv: Optional[str]) -> Optional[Path]:
-        """CSV 파일 경로에서 일일 리포트 PDF 경로 추정"""
+        """CSV 파일 경로에서 일일 리포트 Markdown 경로 추정"""
         if not source_csv:
             return None
 
@@ -354,13 +358,13 @@ class HacieReportGenerator:
         if not csv_path.is_absolute():
             csv_path = self.output_dir / csv_path
 
-        pdf_name = csv_path.name.replace('wconcept_best_', '일일_요약_').replace('.csv', '.pdf')
-        return csv_path.parent / pdf_name
+        report_name = csv_path.name.replace('wconcept_best_', '일일_요약_').replace('.csv', '.md')
+        return csv_path.parent / report_name
 
     def _resolve_weekly_report_path(self, year: int, month: int, week_num: int) -> Path:
-        """주간 리포트 PDF 경로 추정"""
+        """주간 리포트 Markdown 경로 추정"""
         base_dir = self.output_dir / str(year) / f"{month:02d}"
-        filename = f"{year}년_{month:02d}월_{week_num}주차_통계.pdf"
+        filename = f"{year}년_{month:02d}월_{week_num}주차_통계.md"
         return base_dir / filename
 
     def _ensure_pdf_support(self) -> str:
@@ -676,6 +680,11 @@ class HacieReportGenerator:
 
             story.append(Paragraph(self._convert_inline_markdown(' '.join(paragraph_lines)), styles['body']))
 
+    def write_markdown_report(self, markdown_text: str, output_path: Path) -> None:
+        """마크다운 문자열을 UTF-8 파일로 저장"""
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_text(markdown_text, encoding='utf-8')
+
     def write_pdf_report(self, markdown_text: str, output_path: Path) -> None:
         """마크다운 문자열을 PDF로 저장"""
         font_name = self._ensure_pdf_support()
@@ -696,7 +705,7 @@ class HacieReportGenerator:
         self._append_markdown_to_story(markdown_text, story, styles, font_name)
         document.build(story)
 
-    def build_daily_slack_message(self, products: List[Dict], pdf_path: Path, report_date_text: str) -> str:
+    def build_daily_slack_message(self, products: List[Dict], report_path: Path, report_date_text: str, csv_path: Optional[Path] = None) -> str:
         """일일 리포트용 슬랙 메시지 생성"""
         grouped = defaultdict(list)
         for product in products:
@@ -720,8 +729,11 @@ class HacieReportGenerator:
                     lines.append(f"{rank} / {name}")
             lines.append("")
 
-        pdf_link = self._github_blob_url(pdf_path)
-        lines.append(f"PDF 링크: {pdf_link if pdf_link else str(pdf_path)}")
+        report_link = self._github_blob_url(report_path)
+        csv_link = self._github_blob_url(csv_path) if csv_path else None
+        lines.append(f"요약 링크: {report_link if report_link else str(report_path)}")
+        if csv_path:
+            lines.append(f"데이터 파일: {csv_link if csv_link else str(csv_path)}")
         return "\n".join(lines)
 
     def _price_display_from_entry(self, entry: Dict) -> str:
@@ -854,7 +866,7 @@ class HacieReportGenerator:
             source_csv_path = str(csv_file)
         
         try:
-            with open(csv_file, 'r', encoding='utf-8') as f:
+            with open(csv_file, 'r', encoding='utf-8-sig') as f:
                 reader = csv.DictReader(f)
                 total_rows = 0
                 hacie_rows = 0
@@ -1350,7 +1362,7 @@ class HacieReportGenerator:
             report += "\n**HACIE 상품이 발견되지 않았습니다.**\n"
         
         # 푸터
-        with open(csv_file_path, 'r', encoding='utf-8') as f:
+        with open(csv_file_path, 'r', encoding='utf-8-sig') as f:
             line_count = sum(1 for _ in f)
         
         report += f"""
@@ -1366,7 +1378,8 @@ class HacieReportGenerator:
         
         return {
             'markdown': report,
-            'csv': ''
+            'csv': '',
+            'products': products,
         }
     
     def generate_monthly_report(self, year: int, month: int) -> Optional[Dict[str, str]]:
@@ -1920,9 +1933,11 @@ def main():
                 # 출력 디렉토리 생성
                 output_file_path.parent.mkdir(parents=True, exist_ok=True)
                 
-                # PDF 저장
-                generator.write_pdf_report(result['markdown'], output_file_path)
-                print(f"✓ 일일 리포트(PDF) 생성 완료: {output_file_path}")
+                # Markdown 저장
+                if output_file_path.suffix.lower() == '.pdf':
+                    output_file_path = output_file_path.with_suffix('.md')
+                generator.write_markdown_report(result['markdown'], output_file_path)
+                print(f"✓ 일일 리포트(Markdown) 생성 완료: {output_file_path}")
                 
                 # 성공 알림
                 # 파일명에서 날짜 추출 (wconcept_best_251110_082030.csv)
@@ -1943,7 +1958,8 @@ def main():
                 success_msg = generator.build_daily_slack_message(
                     result.get('products', []),
                     output_file_path,
-                    report_date_text
+                    report_date_text,
+                    csv_file_path
                 )
                 generator.send_slack_notification(success_msg, is_error=False)
             else:
@@ -1974,14 +1990,14 @@ def main():
                 
                 base_filename = f"{year}년_{month:02d}월_{week}주차_통계"
                 
-                # PDF 저장
-                pdf_file = output_dir / f"{base_filename}.pdf"
-                generator.write_pdf_report(result['markdown'], pdf_file)
-                print(f"✓ 주간 리포트(PDF) 생성: {pdf_file}")
+                # Markdown 저장
+                md_file = output_dir / f"{base_filename}.md"
+                generator.write_markdown_report(result['markdown'], md_file)
+                print(f"✓ 주간 리포트(Markdown) 생성: {md_file}")
                 
                 # CSV 저장
                 csv_file = output_dir / f"{base_filename}.csv"
-                with open(csv_file, 'w', encoding='utf-8') as f:
+                with open(csv_file, 'w', encoding='utf-8-sig', newline='') as f:
                     f.write(result['csv'])
                 print(f"✓ 주간 리포트(CSV) 생성: {csv_file}")
                 
@@ -2015,14 +2031,14 @@ def main():
                 
                 base_filename = f"{year}년_{month:02d}월_월간통계"
                 
-                # PDF 저장
-                pdf_file = output_dir / f"{base_filename}.pdf"
-                generator.write_pdf_report(result['markdown'], pdf_file)
-                print(f"✓ 월간 리포트(PDF) 생성: {pdf_file}")
+                # Markdown 저장
+                md_file = output_dir / f"{base_filename}.md"
+                generator.write_markdown_report(result['markdown'], md_file)
+                print(f"✓ 월간 리포트(Markdown) 생성: {md_file}")
                 
                 # CSV 저장
                 csv_file = output_dir / f"{base_filename}.csv"
-                with open(csv_file, 'w', encoding='utf-8') as f:
+                with open(csv_file, 'w', encoding='utf-8-sig', newline='') as f:
                     f.write(result['csv'])
                 print(f"✓ 월간 리포트(CSV) 생성: {csv_file}")
                 

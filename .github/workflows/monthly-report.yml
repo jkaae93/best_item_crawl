@@ -93,7 +93,7 @@ jobs:
           python3 scripts/generate_reports.py monthly ${year} ${month_num}
           
           # 생성된 파일 확인
-          report_file="output/${year}/${month}/${year}년_${month}월_월간통계.pdf"
+          report_file="output/${year}/${month}/${year}년_${month}월_월간통계.md"
           
           if [ -f "$report_file" ]; then
             echo "report_exists=true" >> $GITHUB_OUTPUT
@@ -134,7 +134,7 @@ jobs:
           git fetch origin master
           git rebase origin/master || git merge origin/master -m "Merge remote changes"
           
-          git add output/${year}/${month}/*월간통계.pdf
+          git add output/${year}/${month}/*월간통계.md
           git add output/${year}/${month}/*월간통계.csv
           
           if git diff --staged --quiet; then
