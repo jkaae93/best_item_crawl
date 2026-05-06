@@ -188,7 +188,7 @@ jobs:
           filtered_rows = []
           best_by_key = {}
 
-          with path.open("r", encoding="utf-8", newline="") as f:
+          with path.open("r", encoding="utf-8-sig", newline="") as f:
               reader = csv.DictReader(f)
               for row in reader:
                   if not is_hacie(row):
@@ -274,8 +274,8 @@ jobs:
           hacie_count="${{ steps.stats.outputs.hacie_count }}"
           echo "📊 발견된 HACIE 상품: ${hacie_count}개"
           
-          # PDF 파일명: 일일_요약_yyMMdd_hhmmss.pdf (CSV와 동일한 타임스탬프)
-          summary_file="output/${year}/${month}/${day}/일일_요약_${time_suffix}.pdf"
+          # Markdown 파일명: 일일_요약_yyMMdd_hhmmss.md (CSV와 동일한 타임스탬프)
+          summary_file="output/${year}/${month}/${day}/일일_요약_${time_suffix}.md"
           
           # generate_reports.py를 사용하여 리포트 생성
           echo "📝 generate_reports.py를 사용하여 일일 리포트 생성 중..."
@@ -431,12 +431,13 @@ jobs:
           repo_url="https://github.com/${GITHUB_REPOSITORY}"
           file_path="output/${year}/${month}/${day}"
           file_url="${repo_url}/tree/master/${file_path}"
-          summary_name="일일_요약_${time_suffix}.pdf"
+          csv_url="${repo_url}/blob/master/${file_path}/${csv_name}"
+          summary_name="일일_요약_${time_suffix}.md"
           summary_path="${file_path}/${summary_name}"
           summary_url="${repo_url}/blob/master/${summary_path}"
           
           # Slack 메시지 생성
-          payload=$(YEAR="$year" MONTH="$month" DAY="$day" FILE_URL="$file_url" CSV_NAME="$csv_name" KST_TIME="$kst_time" SUMMARY_NAME="$summary_name" SUMMARY_URL="$summary_url" python3 - <<'PY'
+          payload=$(YEAR="$year" MONTH="$month" DAY="$day" FILE_URL="$file_url" CSV_NAME="$csv_name" CSV_URL="$csv_url" KST_TIME="$kst_time" SUMMARY_NAME="$summary_name" SUMMARY_URL="$summary_url" python3 - <<'PY'
           import json
           import os
           import time
@@ -459,7 +460,7 @@ jobs:
               },
               {
                   "title": "데이터 파일",
-                  "value": f"`{os.environ['CSV_NAME']}`",
+                  "value": f"<{os.environ['CSV_URL']}|{os.environ['CSV_NAME']}>",
                   "short": False,
               },
               {
@@ -501,8 +502,8 @@ jobs:
           # Slack 웹훅 전송
           echo "📤 Slack 알림 전송 중..."
           response=$(curl -X POST \
-            -H 'Content-type: application/json' \
-            --data "$payload" \
+            -H 'Content-type: application/json; charset=utf-8' \
+            --data-binary "$payload" \
             -w "\n%{http_code}" \
             -s \
             "$SLACK_WEBHOOK_URL")

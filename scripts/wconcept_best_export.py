@@ -989,7 +989,7 @@ def write_csv(rows: List[List[Any]], output_dir: Path, timestamp: datetime) -> T
         "당일배송", "리뷰수", "찜수", "리뷰평점", "상품상태코드", "상품타입코드",
         "이벤트시작", "이벤트종료", "컨텐츠정보"
     ]
-    with out_path.open("w", newline="", encoding="utf-8") as f:
+    with out_path.open("w", newline="", encoding="utf-8-sig") as f:
         writer = csv.writer(f)
         writer.writerow(headers)
         writer.writerows(rows)

@@ -76,7 +76,7 @@ jobs:
           export PYTHONPATH="${PYTHONPATH}:${GITHUB_WORKSPACE}"
           python3 scripts/generate_reports.py weekly ${year} ${month_num} ${week_num}
 
-          report_file="output/${year}/${month}/${year}년_${month}월_${week_num}주차_통계.pdf"
+          report_file="output/${year}/${month}/${year}년_${month}월_${week_num}주차_통계.md"
 
           if [ -f "$report_file" ]; then
             echo "report_exists=true" >> $GITHUB_OUTPUT
@@ -117,7 +117,7 @@ jobs:
           git fetch origin master
           git rebase origin/master || git merge origin/master -m "Merge remote changes"
 
-          git add output/${year}/${month}/*주차_통계.pdf
+          git add output/${year}/${month}/*주차_통계.md
           git add output/${year}/${month}/*주차_통계.csv
 
           if git diff --staged --quiet; then
