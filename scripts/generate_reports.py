@@ -16,6 +16,7 @@ from html import escape
 from urllib.parse import quote
 from zoneinfo import ZoneInfo
 import requests
+import base64
 
 try:
     from reportlab.lib import colors
@@ -52,6 +53,28 @@ class HacieReportGenerator:
         self.output_dir = output_dir
         self.slack_webhook_url = slack_webhook_url or os.getenv('SLACK_WEBHOOK_URL')
         self.github_repository = os.getenv('GITHUB_REPOSITORY', 'jkaae93/best_item_crawl')
+
+    def _build_slack_icon_svg_data_uri(self, is_error: bool = False) -> str:
+        """프로젝트 성격에 맞는 슬랙 아이콘(SVG) data URI 생성"""
+        bg_color = "#D7263D" if is_error else "#1F6FEB"
+        text_color = "#FFFFFF" if is_error else "#E6F0FF"
+        status_text = "ERR" if is_error else "CRAWL"
+        svg = f"""<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
+  <defs>
+    <linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="{bg_color}"/>
+      <stop offset="100%" stop-color="#0B1220"/>
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" rx="120" fill="url(#g)"/>
+  <circle cx="256" cy="196" r="110" fill="#FFFFFF" opacity="0.14"/>
+  <path d="M154 260c60-118 142-138 204-80" stroke="#FFFFFF" stroke-width="24" fill="none" stroke-linecap="round"/>
+  <circle cx="245" cy="178" r="18" fill="#FFFFFF"/>
+  <circle cx="324" cy="162" r="14" fill="#FFFFFF" opacity="0.9"/>
+  <text x="256" y="408" text-anchor="middle" font-family="Arial, sans-serif" font-size="58" font-weight="700" fill="{text_color}">{status_text}</text>
+</svg>"""
+        encoded_svg = base64.b64encode(svg.encode('utf-8')).decode('ascii')
+        return f"data:image/svg+xml;base64,{encoded_svg}"
     
     def send_slack_notification(self, message: str, is_error: bool = False) -> bool:
         """슬랙 알림 전송"""
@@ -64,6 +87,8 @@ class HacieReportGenerator:
             color = "#FF0000" if is_error else "#36a64f"
             
             payload = {
+                "username": "HACIE Crawler Bot",
+                "icon_url": self._build_slack_icon_svg_data_uri(is_error=is_error),
                 "attachments": [{
                     "color": color,
                     "text": f"{emoji} {message}",
